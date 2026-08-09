@@ -1,0 +1,21 @@
+.App {
+  min-height: 100vh;
+}
+
+/* Line clamp utility */
+.line-clamp-1 {
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Smooth scrollbar for horizontal category bar */
+.overflow-x-auto::-webkit-scrollbar { height: 4px; }
+.overflow-x-auto::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 2px; }
