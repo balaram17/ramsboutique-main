@@ -23,7 +23,7 @@ const Navbar = () => {
 
   useEffect(() => {
     if (!location) setLocOpen(true);
-  }, [location]);
+  }, []);
 
   const submitSearch = (e) => {
     e.preventDefault();
