@@ -982,7 +982,11 @@ logger = logging.getLogger(__name__)
 
 @app.on_event("startup")
 async def startup():
-    await seed_db()
+    try:
+        await seed_db()
+    except Exception as e:
+        print(f"Startup seed skipped: {e}")
+    #await seed_db()
 
 
 @app.on_event("shutdown")
