@@ -971,8 +971,7 @@ app.include_router(api)
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=["https://gray-ground-094425710.7.azurestaticapps.net",
-        "http://localhost:3000",],
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
