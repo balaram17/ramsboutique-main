@@ -74,7 +74,7 @@ const Login = () => {
 
   try {
     // Call backend API
-    const res = await axios.post(`${API_BASE_URL}/auth/agent`, {
+    const res = await axios.post(`${API_BASE_URL}/api/auth/agent`, {
       phone: agentPhone,
     });
 
