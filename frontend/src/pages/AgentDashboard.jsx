@@ -5,7 +5,9 @@ import api from '../lib/api';
 import axios from 'axios';
 import { Package, User, Phone, MapPin, Clock } from 'lucide-react';
 
-const API_BASE_URL = process.env.REACT_APP_API_BASE_URL;
+const API_BASE_URL =
+  process.env.REACT_APP_API_BASE_URL ||
+  'https://ramsboutique-api-prod-endcc7bmbegsanca.southindia-01.azurewebsites.net';
 
 const AgentDashboard = () => {
   const [profile, setProfile] = useState(null)
