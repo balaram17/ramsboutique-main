@@ -58,9 +58,9 @@ const Login = () => {
   // UPDATED: INSTANT AGENT LOGIN ROUTINE (NO OTP REQUIRED)
   // =========================================================
   
- const API_BASE_URL =
+  const API_BASE_URL =
   process.env.REACT_APP_API_BASE_URL ||
-  'https://ramsboutique-api-prod-endcc7bmbegsanca.southindia-01.azurewebsites.net';
+  'https://ramsboutique-api-prod-endcc7bmbegsanca.southindia-01.azurewebsites.net/api';
 
   const doAgentLogin = async (e) => {
   e.preventDefault();
@@ -77,7 +77,7 @@ const Login = () => {
 
   try {
     // Call backend API
-    const res = await axios.post(`${API_BASE_URL}/api/auth/agent`, {
+    const res = await axios.post(`${API_BASE_URL}/auth/agent`, {
       phone: agentPhone,
     });
 
