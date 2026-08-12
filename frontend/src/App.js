@@ -21,6 +21,7 @@ import OrderSuccess from './pages/OrderSuccess';
 import Orders from './pages/Orders';
 import Login from './pages/Login';
 import Profile from './pages/Profile';
+import AgentDashboard from './pages/AgentDashboard'
 
 import AdminLogin from './pages/admin/AdminLogin';
 import AdminLayout from './pages/admin/AdminLayout';
@@ -36,7 +37,21 @@ import AdminCoupons from './pages/admin/AdminCoupons';
 const Shell = ({ children }) => {
   const loc = useLocation();
   const isAdmin = loc.pathname.startsWith('/admin');
+  const isAgent = loc.pathname.startsWith('/agent');
+
+  // Admin Pages - no customer layout
   if (isAdmin) return <>{children}</>;
+
+  // Agent Pages - standalone layout
+  if (isAgent) {
+    return (
+      <div className="min-h-screen bg-gray-100">
+        {children}
+      </div>
+    );
+  }
+
+  //customer Pages
   return (
     <div className="flex flex-col min-h-screen bg-gray-50">
       <Navbar />
@@ -68,7 +83,7 @@ function App() {
                     <Route path="/orders" element={<Orders />} />
                     <Route path="/login" element={<Login />} />
                     <Route path="/profile" element={<Profile />} />
-
+                    <Route path="/agent/dashboard" element={<AgentDashboard />} />
                     <Route path="/admin/login" element={<AdminLogin />} />
                     <Route path="/admin" element={<AdminLayout />}>
                       <Route index element={<AdminDashboard />} />
