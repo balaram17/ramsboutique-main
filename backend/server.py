@@ -1,4 +1,4 @@
-"""DMart Vizag Clone - FastAPI backend."""
+"""Ramsboutique Vizag Clone - FastAPI backend."""
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Query
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -52,6 +52,8 @@ class SignupIn(BaseModel):
     phone: str
     password: str
 
+class LoginAgentIn(BaseModel):
+    phone: str
 
 class LoginIn(BaseModel):
     email: EmailStr
@@ -93,7 +95,7 @@ class CheckoutIn(BaseModel):
 
 
 class OrderStatusUpdate(BaseModel):
-    status: str  # placed, packed, out_for_delivery, delivered, cancelled
+    status:Optional[str] = None # placed, packed, out_for_delivery, delivered, cancelled
     agent_id: Optional[str] = None
 
 
@@ -190,8 +192,8 @@ DEFAULT_SITE_CONTENT = {
         "cta1_link": "/c/grocery",
         "cta2_text": "Fresh Produce",
         "cta2_link": "/c/fruits-vegetables",
-        "image": "https://images.unsplash.com/photo-1542838132-92c53300491e?w=800",
-    },
+        "image": "https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&w=800&q=80"
+        },
     "login": {
         "welcome": "Welcome",
         "subheading": "Login or sign up to continue",
@@ -201,13 +203,13 @@ DEFAULT_SITE_CONTENT = {
         "description": "Everyday low prices delivered fresh across Visakhapatnam within 5 km of our Dwaraka Nagar store.",
         "tagline": "Authentic. Aromatic. Indulgent.",
         "address": "Dwaraka Nagar, Visakhapatnam, AP 530016",
-        "phone": "1800-123-4567",
-        "email": "support@ramsboutique.com",
+        "phone": "807-476-3983",
+        "email": "info@ramsboutique.com",
         "facebook": "https://facebook.com/ramsboutique",
         "instagram": "https://instagram.com/ramsboutique",
         "twitter": "https://twitter.com/ramsboutique",
         "youtube": "https://youtube.com/ramsboutique",
-        "copyright": "© 2025 Rams Boutique. All rights reserved.",
+        "copyright": "© 2026 Rams Boutique. All rights reserved.",
     },
     "store_hours": DEFAULT_STORE_HOURS,
 }
@@ -406,6 +408,34 @@ async def login(data: LoginIn):
     token = create_token(user["id"], user["role"])
     return {"token": token, "user": {"id": user["id"], "name": user["name"], "email": user["email"], "phone": user["phone"], "role": user["role"]}}
 
+@api.post("/auth/agent")
+async def agent(data: LoginAgentIn):
+    phone = data.phone.strip()
+
+    # Search using the correct field name
+    user = await db.agents.find_one({
+        "phone": phone,
+        "active": True
+    })
+
+    if not user:
+        raise HTTPException(401, "Mobile number not found in Agent collection.")
+
+    token = create_token(user["id"], "agent")
+
+    return {
+        "token": token,
+        "agent_id": user["id"],
+        "name": user["name"],
+        "phone": user["phone"],
+        "role": "agent"
+    }
+
+# TEMP DEBUG
+@api.get("/debug/agents")
+async def debug_agents():
+    docs = await db.agents.find().to_list(100)
+    return [clean(d) for d in docs]
 
 @api.post("/auth/admin-login")
 async def admin_login(data: LoginIn):
@@ -427,7 +457,7 @@ async def verify_otp(data: OtpVerifyIn):
         user = {
             "id": str(uuid.uuid4()),
             "name": f"User {data.phone[-4:]}",
-            "email": f"user{data.phone}@dmartvizag.local",
+            "email": f"user{data.phone}@ramsboutique.com",
             "phone": data.phone,
             "password": hash_password(str(uuid.uuid4())),
             "role": "user",
@@ -959,6 +989,82 @@ async def admin_users(_=Depends(get_current_admin)):
     docs = await db.users.find({"role": "user"}).to_list(500)
     return [{"id": d["id"], "name": d["name"], "email": d["email"], "phone": d["phone"], "created_at": d.get("created_at")} for d in docs]
 
+# ============ AGENT DASHBOARD APIs ============
+
+from auth_utils import get_current_user
+
+
+# Get logged-in agent profile
+@api.get("/agent/me")
+async def agent_me(current=Depends(get_current_user)):
+    if current["role"] != "agent":
+        raise HTTPException(403, "Agent access required")
+
+    agent = await db.agents.find_one({"id": current["user_id"]})
+    if not agent:
+        raise HTTPException(404, "Agent not found")
+
+    return clean(agent)
+
+
+# Update agent profile
+@api.patch("/agent/me")
+async def update_agent_me(data: AgentIn, current=Depends(get_current_user)):
+    if current["role"] != "agent":
+        raise HTTPException(403, "Agent access required")
+
+    await db.agents.update_one(
+        {"id": current["user_id"]},
+        {"$set": data.dict()}
+    )
+
+    agent = await db.agents.find_one({"id": current["user_id"]})
+    return clean(agent)
+
+
+# Orders assigned to the logged-in agent
+@api.get("/agent/orders")
+async def agent_orders(current=Depends(get_current_user)):
+    if current["role"] != "agent":
+        raise HTTPException(403, "Agent access required")
+
+    docs = await db.orders.find({
+        "agent_id": current["user_id"]
+    }).sort("created_at", -1).to_list(200)
+
+    return [clean(d) for d in docs]
+
+
+# Agent can update only his assigned orders
+@api.patch("/agent/orders/{oid}")
+async def agent_update_order(
+    oid: str,
+    data: OrderStatusUpdate,
+    current=Depends(get_current_user)
+):
+    if current["role"] != "agent":
+        raise HTTPException(403, "Agent access required")
+
+    order = await db.orders.find_one({
+        "id": oid,
+        "agent_id": current["user_id"]
+    })
+
+    if not order:
+        raise HTTPException(404, "Assigned order not found")
+
+    allowed_status = ["packed", "out_for_delivery", "delivered"]
+
+    if data.status not in allowed_status:
+        raise HTTPException(400, "Invalid status for agent")
+
+    await db.orders.update_one(
+        {"id": oid},
+        {"$set": {"status": data.status}}
+    )
+
+    updated = await db.orders.find_one({"id": oid})
+    return clean(updated)
 
 # ============ HEALTH ============
 @api.get("/")
@@ -982,11 +1088,7 @@ logger = logging.getLogger(__name__)
 
 @app.on_event("startup")
 async def startup():
-    try:
-        await seed_db()
-    except Exception as e:
-        print(f"Startup seed skipped: {e}")
-    #await seed_db()
+    await seed_db()
 
 
 @app.on_event("shutdown")

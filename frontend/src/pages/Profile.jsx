@@ -39,7 +39,7 @@ const Profile = () => {
           <div className="w-16 h-16 rounded-full bg-[#6b3410] text-white flex items-center justify-center font-black text-2xl">{user.name[0]}</div>
           <div>
             <h1 className="text-xl font-bold">{user.name}</h1>
-            <p className="text-sm text-gray-500">Member since 2025</p>
+            <p className="text-sm text-gray-500">Member since 2026</p>
           </div>
         </div>
         <div className="mt-6 space-y-3 text-sm">

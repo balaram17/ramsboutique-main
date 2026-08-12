@@ -7,7 +7,11 @@ import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs';
 import { useToast } from '../hooks/use-toast';
-import { Loader2, ShieldCheck } from 'lucide-react';
+import { Loader2, Truck, User } from 'lucide-react';
+import api from '../lib/api';
+import axios from 'axios';
+
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL;
 
 const Login = () => {
   const { login, signup, verifyOtp } = useAuth();
@@ -22,6 +26,9 @@ const Login = () => {
   const [loginF, setLoginF] = useState({ email: '', password: '' });
   const [signF, setSignF] = useState({ name: '', email: '', phone: '', password: '' });
   const [otpF, setOtpF] = useState({ phone: '', otp: '', sent: false });
+  
+  // Isolated state tracking for the delivery agent phone number
+  const [agentPhone, setAgentPhone] = useState('');
 
   const doLogin = async (e) => {
     e.preventDefault(); setBusy(true);
@@ -47,6 +54,55 @@ const Login = () => {
     finally { setBusy(false); }
   };
 
+  // =========================================================
+  // UPDATED: INSTANT AGENT LOGIN ROUTINE (NO OTP REQUIRED)
+  // =========================================================
+  const API_BASE_URL = process.env.REACT_APP_API_BASE_URL;
+
+  const doAgentLogin = async (e) => {
+  e.preventDefault();
+
+  if (agentPhone.length !== 10) {
+    return toast({
+      title: 'Validation Error',
+      description: 'Enter a valid 10-digit mobile number.',
+      variant: 'destructive',
+    });
+  }
+
+  setBusy(true);
+
+  try {
+    // Call backend API
+    const res = await axios.post(`${API_BASE_URL}/auth/agent`, {
+      phone: agentPhone,
+    });
+
+    // Store session data
+    localStorage.setItem('agentToken', res.data.token);
+    localStorage.setItem('agentId', res.data.agent_id);
+    localStorage.setItem('agentName', res.data.name);
+
+    toast({
+      title: 'Login Successful',
+      description: `Welcome back, ${res.data.name}!`,
+    });
+
+    // Redirect to dashboard
+    nav('/agent/dashboard');
+  } catch (err) {
+    toast({
+      title: 'Access Denied',
+      description:
+        err.response?.data?.detail ||
+        'Mobile number not found in Agent collection.',
+      variant: 'destructive',
+    });
+  } finally {
+    setBusy(false);
+  }
+};
+
   return (
     <div className="min-h-[80vh] flex items-center justify-center px-4 py-10 bg-gray-50">
       <div className="w-full max-w-md bg-white rounded-lg border shadow-sm p-6">
@@ -60,10 +116,11 @@ const Login = () => {
         </div>
 
         <Tabs defaultValue="login">
-          <TabsList className="grid w-full grid-cols-3">
+          <TabsList className="grid w-full grid-cols-4">
             <TabsTrigger value="login">Login</TabsTrigger>
             <TabsTrigger value="signup">Sign up</TabsTrigger>
             <TabsTrigger value="otp">OTP</TabsTrigger>
+            <TabsTrigger value="agent" className="text-indigo-600 font-semibold gap-1"><Truck className="w-3 h-3" /> Agent</TabsTrigger>
           </TabsList>
 
           <TabsContent value="login">
@@ -95,7 +152,39 @@ const Login = () => {
                   <Button type="submit" disabled={busy} className="w-full bg-[#f7941d] hover:bg-[#e58500]">{busy && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}Verify & Continue</Button>
                 </>
               )}
-              <div className="text-xs text-gray-500 flex items-center gap-1 justify-center"><ShieldCheck className="w-3 h-3" /> Demo: any 4-digit code works</div>
+              <div className="text-xs text-gray-500 flex items-center gap-1 justify-center">🛡️ Demo: any 4-digit code works</div>
+            </form>
+          </TabsContent>
+
+          {/* =========================================================
+              UPDATED: ONE-CLICK AGENT INSTANT DB LOGIN FORM PANEL
+              ========================================================= */}
+          <TabsContent value="agent">
+            <form onSubmit={doAgentLogin} className="space-y-4 mt-3">
+              <div>
+                <Label>Registered Phone Number</Label>
+                <div className="relative flex rounded-md mt-1">
+                  <Input 
+                    required 
+                    disabled={busy}
+                    placeholder="Enter 10-digit number" 
+                    value={agentPhone} 
+                    maxLength={10} 
+                    onChange={(e) => setAgentPhone(e.target.value.replace(/\D/g, ''))} 
+                  />
+                </div>
+              </div>
+              
+              <Button 
+                type="submit" 
+                disabled={busy} 
+                className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2"
+              >
+                {busy && <Loader2 className="w-4 h-4 mr-2 animate-spin" />} Verify & Sign In
+              </Button>
+              <div className="text-xs text-gray-400 text-center mt-1">
+                The portal will instantly cross-reference our delivery worker network and log you in.
+              </div>
             </form>
           </TabsContent>
         </Tabs>
