@@ -599,7 +599,7 @@ async def validate_coupon(data: CouponValidateIn):
     }
 
 
-@api.get("/admin/coupons")
+@api.get("/api/admin/coupons")
 async def admin_list_coupons(_=Depends(get_current_admin)):
     docs = await db.coupons.find().sort("created_at", -1).to_list(500)
     return [clean(d) for d in docs]
