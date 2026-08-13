@@ -5,9 +5,9 @@ import api from '../lib/api';
 import axios from 'axios';
 import { Package, User, Phone, MapPin, Clock } from 'lucide-react';
 
+
 const API_BASE_URL =
-  process.env.REACT_APP_API_BASE_URL ||
-  'https://ramsboutique-api-prod-endcc7bmbegsanca.southindia-01.azurewebsites.net/api';
+  process.env.REACT_APP_API_BASE_URL
 
 const AgentDashboard = () => {
   const [profile, setProfile] = useState(null)
@@ -29,8 +29,8 @@ const AgentDashboard = () => {
 const loadData = useCallback(async () => {
   try {
     const [me, myOrders] = await Promise.all([
-      api.get('/agent/me'),
-      api.get('/agent/orders')
+      api.get('/api/agent/me'),
+      api.get('/api/agent/orders')
     ]);
 
     setProfile(me.data);
@@ -49,7 +49,7 @@ useEffect(() => {
 
   const updateStatus = async (orderId, status) => {
     try {
-      await api.patch(`/agent/orders/${orderId}`, { status })
+      await api.patch(`/api/agent/orders/${orderId}`, { status })
 
       setOrders(prev =>
         prev.map(o =>
@@ -63,7 +63,7 @@ useEffect(() => {
 
   const saveProfile = async () => {
     try {
-      await api.patch('/agent/me', profile)
+      await api.patch('/api/agent/me', profile)
       alert('Profile updated')
     } catch {
       alert('Profile update failed')
@@ -121,13 +121,10 @@ useEffect(() => {
                 <div className="text-xs text-gray-500">{profile?.phone}</div>
               </div>
 
-              <button
-                onClick={logout}
-                className="w-full flex items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-50"
-              >
-                <LogOut className="w-4 h-4" />
-                Logout
-              </button>
+          <button onClick={() => { logout(); }} className="p-5 border-t border-white/10 text-left text-sm flex items-center gap-3 hover:bg-white/5">
+                <LogOut className="w-4 h-4" /> Logout
+          </button>
+
             </div>
           )}
         </div>

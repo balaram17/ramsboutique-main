@@ -59,8 +59,7 @@ const Login = () => {
   // =========================================================
   
   const API_BASE_URL =
-  process.env.REACT_APP_API_BASE_URL ||
-  'https://ramsboutique-api-prod-endcc7bmbegsanca.southindia-01.azurewebsites.net/api';
+  process.env.REACT_APP_API_BASE_URL
 
   const doAgentLogin = async (e) => {
   e.preventDefault();
@@ -77,7 +76,7 @@ const Login = () => {
 
   try {
     // Call backend API
-    const res = await axios.post(`${API_BASE_URL}/auth/agent`, {
+    const res = await axios.post(`${API_BASE_URL}/api/auth/agent`, {
       phone: agentPhone,
     });
 

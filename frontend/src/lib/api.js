@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'https://ramsboutique-api-prod-endcc7bmbegsanca.southindia-01.azurewebsites.net';
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL
 export const API = `${BACKEND_URL}/api`;
 
 const api = axios.create({ 
