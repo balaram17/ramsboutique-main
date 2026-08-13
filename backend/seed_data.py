@@ -1,4 +1,4 @@
-"""DMart-style seed data for Vizag store."""
+"""seed data for Vizag store."""
 
 CATEGORIES = [
     {"slug": "grocery", "name": "Grocery & Staples", "icon": "wheat"},
