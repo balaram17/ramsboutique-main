@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, EmailStr
 from typing import List, Optional, Any
 from datetime import datetime, timezone, timedelta
 
+
 from auth_utils import (
     hash_password, verify_password, create_token,
     get_current_user, get_current_admin,
@@ -27,6 +28,7 @@ client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ["DB_NAME"]]
 
 app = FastAPI(title="Rams Boutique Vizag API")
+api = APIRouter(prefix="/api")
 origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
@@ -42,7 +44,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-api = APIRouter(prefix="/api")
 
 # Store location: Dwaraka Nagar, Visakhapatnam
 STORE_LAT = 17.7231
@@ -1086,7 +1087,7 @@ async def agent_update_order(
 async def root():
     return {"message": "Rams Boutique Vizag API", "store": "Dwaraka Nagar", "radius_km": DELIVERY_RADIUS_KM}
 
-
+# Include routers AFTER all routes are defined
 app.include_router(api)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
