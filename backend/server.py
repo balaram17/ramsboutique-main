@@ -1011,7 +1011,7 @@ from auth_utils import get_current_user
 
 
 # Get logged-in agent profile
-@api.get("/api/agent/me")
+@api.get("/agent/me")
 async def agent_me(current=Depends(get_current_user)):
     if current["role"] != "agent":
         raise HTTPException(403, "Agent access required")
@@ -1024,7 +1024,7 @@ async def agent_me(current=Depends(get_current_user)):
 
 
 # Update agent profile
-@api.patch("/api/agent/me")
+@api.patch("/agent/me")
 async def update_agent_me(data: AgentIn, current=Depends(get_current_user)):
     if current["role"] != "agent":
         raise HTTPException(403, "Agent access required")
@@ -1039,7 +1039,7 @@ async def update_agent_me(data: AgentIn, current=Depends(get_current_user)):
 
 
 # Orders assigned to the logged-in agent
-@api.get("/api/agent/orders")
+@api.get("/agent/orders")
 async def agent_orders(current=Depends(get_current_user)):
     if current["role"] != "agent":
         raise HTTPException(403, "Agent access required")
@@ -1052,7 +1052,7 @@ async def agent_orders(current=Depends(get_current_user)):
 
 
 # Agent can update only his assigned orders
-@api.patch("/api/agent/orders/{oid}")
+@api.patch("/agent/orders/{oid}")
 async def agent_update_order(
     oid: str,
     data: OrderStatusUpdate,

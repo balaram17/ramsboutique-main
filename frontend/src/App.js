@@ -34,6 +34,13 @@ import AdminContent from './pages/admin/AdminContent';
 import AdminCategories from './pages/admin/AdminCategories';
 import AdminCoupons from './pages/admin/AdminCoupons';
 
+import Terms from "./pages/Terms";
+import ReturnsRefunds from "./pages/ReturnsRefunds";
+import ContactUs from "./pages/ContactUs";
+import TrackOrder from "./pages/TrackOrder";
+import FAQ from "./pages/FAQ";
+
+
 const Shell = ({ children }) => {
   const loc = useLocation();
   const isAdmin = loc.pathname.startsWith('/admin');
@@ -94,6 +101,11 @@ function App() {
                       <Route path="categories" element={<AdminCategories />} />
                       <Route path="coupons" element={<AdminCoupons />} />
                       <Route path="content" element={<AdminContent />} />
+                          <Route path="/terms" element={<Terms />} />
+                          <Route path="/returns-refunds" element={<ReturnsRefunds />} />
+                          <Route path="/contact" element={<ContactUs />} />
+                          <Route path="/track-order" element={<TrackOrder />} />
+                          <Route path="/faq" element={<FAQ />} />
                     </Route>
                   </Routes>
                 </Shell>

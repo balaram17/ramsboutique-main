@@ -121,8 +121,8 @@ const Login = () => {
           <TabsList className="grid w-full grid-cols-4">
             <TabsTrigger value="login">Login</TabsTrigger>
             <TabsTrigger value="signup">Sign up</TabsTrigger>
-            <TabsTrigger value="otp">OTP</TabsTrigger>
-            <TabsTrigger value="agent" className="text-indigo-600 font-semibold gap-1"><Truck className="w-3 h-3" /> Agent</TabsTrigger>
+            <TabsTrigger value="otp"><User className="w-3 h-3" />&nbsp;OTP</TabsTrigger>
+            <TabsTrigger value="agent"><Truck className="w-3 h-3" />&nbsp;Agent</TabsTrigger>
           </TabsList>
 
           <TabsContent value="login">
@@ -158,9 +158,6 @@ const Login = () => {
             </form>
           </TabsContent>
 
-          {/* =========================================================
-              UPDATED: ONE-CLICK AGENT INSTANT DB LOGIN FORM PANEL
-              ========================================================= */}
           <TabsContent value="agent">
             <form onSubmit={doAgentLogin} className="space-y-4 mt-3">
               <div>
@@ -180,9 +177,9 @@ const Login = () => {
               <Button 
                 type="submit" 
                 disabled={busy} 
-                className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2"
+                className="w-full bg-[#6b3410] hover:bg-[#4d260b]"
               >
-                {busy && <Loader2 className="w-4 h-4 mr-2 animate-spin" />} Verify & Sign In
+                {busy && <Loader2 className="w-full bg-[#6b3410] hover:bg-[#4d260b]" />} Verify & Sign In
               </Button>
               <div className="text-xs text-gray-400 text-center mt-1">
                 The portal will instantly cross-reference our delivery worker network and log you in.
