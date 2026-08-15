@@ -5,10 +5,7 @@
       "redirect": "https://www.ramsboutique.com/:splat",
       "statusCode": 301
     }
-  ]
-}
-
-{
+  ],
   "navigationFallback": {
     "rewrite": "/index.html",
     "exclude": ["/static/images/*.{png,jpg,gif}", "/static/css/*", "/assets/*"]
