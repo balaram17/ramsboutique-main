@@ -2,7 +2,7 @@
   "routes": [
     {
       "route": "/*",
-      "redirect": "https://www.ramsboutique.com/:splat",
+      "redirect": "https://www.ramsboutique.com/",
       "statusCode": 301
     }
   ],
