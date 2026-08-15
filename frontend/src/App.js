@@ -1,6 +1,6 @@
 import React from 'react';
 import './App.css';
-import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, useLocation, Navigate } from 'react-router-dom';
 import { Toaster } from './components/ui/toaster';
 import { AuthProvider } from './context/AuthContext';
 import { CartProvider } from './context/CartContext';
@@ -21,7 +21,7 @@ import OrderSuccess from './pages/OrderSuccess';
 import Orders from './pages/Orders';
 import Login from './pages/Login';
 import Profile from './pages/Profile';
-import AgentDashboard from './pages/AgentDashboard'
+import AgentDashboard from './pages/AgentDashboard';
 
 import AdminLogin from './pages/admin/AdminLogin';
 import AdminLayout from './pages/admin/AdminLayout';
@@ -40,7 +40,6 @@ import ContactUs from "./pages/ContactUs";
 import TrackOrder from "./pages/TrackOrder";
 import FAQ from "./pages/FAQ";
 
-
 const Shell = ({ children }) => {
   const loc = useLocation();
   const isAdmin = loc.pathname.startsWith('/admin');
@@ -58,7 +57,7 @@ const Shell = ({ children }) => {
     );
   }
 
-  //customer Pages
+  // Customer Pages
   return (
     <div className="flex flex-col min-h-screen bg-gray-50">
       <Navbar />
@@ -80,6 +79,7 @@ function App() {
               <CartProvider>
                 <Shell>
                   <Routes>
+                    {/* Customer Core Storefront Routes */}
                     <Route path="/" element={<Home />} />
                     <Route path="/c/:slug" element={<Category />} />
                     <Route path="/search" element={<Category mode="search" />} />
@@ -90,7 +90,18 @@ function App() {
                     <Route path="/orders" element={<Orders />} />
                     <Route path="/login" element={<Login />} />
                     <Route path="/profile" element={<Profile />} />
+                    
+                    {/* Customer Informational Routes (Moved out of admin context) */}
+                    <Route path="/terms" element={<Terms />} /> 
+                    <Route path="/returns-refunds" element={<ReturnsRefunds />} />
+                    <Route path="/contact" element={<ContactUs />} />
+                    <Route path="/track-order" element={<TrackOrder />} />
+                    <Route path="/faq" element={<FAQ />} />
+
+                    {/* Agent Routings */}
                     <Route path="/agent/dashboard" element={<AgentDashboard />} />
+
+                    {/* Admin Routings */}
                     <Route path="/admin/login" element={<AdminLogin />} />
                     <Route path="/admin" element={<AdminLayout />}>
                       <Route index element={<AdminDashboard />} />
@@ -101,12 +112,10 @@ function App() {
                       <Route path="categories" element={<AdminCategories />} />
                       <Route path="coupons" element={<AdminCoupons />} />
                       <Route path="content" element={<AdminContent />} />
-                          {/*<Route path="/terms" element={<Terms />} /> 
-                          <Route path="/returns-refunds" element={<ReturnsRefunds />} />
-                          <Route path="/contact" element={<ContactUs />} />
-                          <Route path="/track-order" element={<TrackOrder />} />
-                          <Route path="/faq" element={<FAQ />} /> */}
                     </Route>
+
+                    {/* Global Wildcard Fallback: Redirects broken paths back to homepage */}
+                    <Route path="*" element={<Navigate to="/" replace />} />
                   </Routes>
                 </Shell>
                 <Toaster />
