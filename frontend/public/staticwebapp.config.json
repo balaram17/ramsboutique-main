@@ -1,11 +1,4 @@
 {
-  "routes": [
-    {
-      "route": "/*",
-      "redirect": "https://www.ramsboutique.com/",
-      "statusCode": 301
-    }
-  ],
   "navigationFallback": {
     "rewrite": "/index.html",
     "exclude": ["/static/images/*.{png,jpg,gif}", "/static/css/*", "/assets/*"]
