@@ -101,11 +101,11 @@ function App() {
                       <Route path="categories" element={<AdminCategories />} />
                       <Route path="coupons" element={<AdminCoupons />} />
                       <Route path="content" element={<AdminContent />} />
-                          <Route path="/terms" element={<Terms />} />
+                          {/*<Route path="/terms" element={<Terms />} /> 
                           <Route path="/returns-refunds" element={<ReturnsRefunds />} />
                           <Route path="/contact" element={<ContactUs />} />
                           <Route path="/track-order" element={<TrackOrder />} />
-                          <Route path="/faq" element={<FAQ />} />
+                          <Route path="/faq" element={<FAQ />} /> */}
                     </Route>
                   </Routes>
                 </Shell>
