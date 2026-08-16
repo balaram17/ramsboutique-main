@@ -27,7 +27,7 @@ jobs:
           api_location: ""
           output_location: "build"
           env: # ─── ADD THIS SECTION ───
-            REACT_APP_API_URL: https://ramsboutique-api-prod-endcc7bmbegsanca.southindia-01.azurewebsites.net
+            REACT_APP_BACKEND_URL: https://ramsboutique-api-prod-endcc7bmbegsanca.southindia-01.azurewebsites.net
 
   close_pull_request_job:
     if: github.event_name == 'pull_request' && github.event.action == 'closed'
