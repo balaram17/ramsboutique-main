@@ -280,9 +280,9 @@ def is_store_open(hours: dict):
 
 
 # ============ Push notifications helper ============
-_vapid_private = os.environ.get("VAPID_PRIVATE_KEY", "")
-_vapid_public = os.environ.get("VAPID_PUBLIC_KEY", "")
-_vapid_claim = os.environ.get("VAPID_CLAIM_EMAIL", "mailto:support@ramsboutique.com")
+_vapid_private = os.environ.get("VAPID_PRIVATE_KEY", "kI7cIn9-gA_eGAgT4Wf8PyPfCaW1qscTf7cxxaOEtKM")
+_vapid_public = os.environ.get("VAPID_PUBLIC_KEY", "BL3tGDHxqhsxGqhgQJC7EcdWyC5GG0GqdcOGMwbZCQB-4XEp6KXD8D7uRMqSYZILjCtYpNRnndaYdVgC1Bw_-mQ")
+_vapid_claim = os.environ.get("VAPID_CLAIM_EMAIL", "mailto:info@ramsboutique.com")
 
 
 async def send_web_push(subscription: dict, title: str, body: str, url: str = "/"):
