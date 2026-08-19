@@ -22,6 +22,7 @@ import Orders from './pages/Orders';
 import Login from './pages/Login';
 import Profile from './pages/Profile';
 import AgentDashboard from './pages/AgentDashboard';
+import Invoice from './pages/Invoice';
 
 import AdminLogin from './pages/admin/AdminLogin';
 import AdminLayout from './pages/admin/AdminLayout';
@@ -100,6 +101,7 @@ function App() {
 
                     {/* Agent Routings */}
                     <Route path="/agent/dashboard" element={<AgentDashboard />} />
+                    <Route path="/orders/:id/invoice" element={<Invoice />} />
 
                     {/* Admin Routings */}
                     <Route path="/admin/login" element={<AdminLogin />} />

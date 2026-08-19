@@ -1082,6 +1082,16 @@ async def agent_update_order(
     updated = await db.orders.find_one({"id": oid})
     return clean(updated)
 
+
+# ============ NEW INVOICE ROUTE ENDPOINT ============
+@api.get("/orders/{order_id}")
+async def get_order_by_id(order_id: str):
+    order = await db.orders.find_one({"$or": [{"id": order_id}, {"order_no": order_id}]})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return clean(order)
+
+
 # ============ HEALTH ============
 @api.get("/")
 async def root():

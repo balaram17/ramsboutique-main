@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../lib/api';
 import { openRazorpayCheckout } from '../lib/razorpay';
-import { Package, RefreshCcw, Loader2, CheckCircle2, XCircle, Clock } from 'lucide-react';
+import { Package, RefreshCcw, Loader2, CheckCircle2, XCircle, Clock, FileText } from 'lucide-react';
 import { inr } from '../lib/utils';
 import { Button } from '../components/ui/button';
 import { useAuth } from '../context/AuthContext';
@@ -65,6 +65,8 @@ const Orders = () => {
           {orders.map((o) => {
             const ps = PAY_STATUS_STYLE[o.payment_status] || PAY_STATUS_STYLE.pending;
             const canRetry = (o.payment_method === 'UPI' || o.payment_method === 'CARD') && ['pending', 'cancelled', 'failed'].includes(o.payment_status) && o.status !== 'cancelled';
+            const isPaid = o.payment_status === 'paid';
+
             return (
               <div key={o.id} className="bg-white border rounded-lg p-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
@@ -74,6 +76,7 @@ const Orders = () => {
                   </div>
                   <span className={`text-xs font-bold px-3 py-1 rounded-full uppercase ${STATUS_STYLE[o.status] || 'bg-gray-100'}`}>{o.status.replace('_', ' ')}</span>
                 </div>
+                
                 <div className="mt-3 flex flex-wrap gap-3 items-center">
                   <div className="flex -space-x-2">
                     {o.items.slice(0, 4).map((it) => (
@@ -84,14 +87,33 @@ const Orders = () => {
                   <div className={`text-xs font-semibold flex items-center gap-1 ${ps.cls}`}><ps.Icon className="w-3.5 h-3.5" /> {ps.label}</div>
                   <div className="ml-auto font-bold">{inr(o.total)}</div>
                 </div>
-                {canRetry && (
-                  <div className="mt-3 flex justify-end">
-                    <Button size="sm" onClick={() => retry(o)} disabled={payingId === o.id} className="bg-[#f7941d] hover:bg-[#e58500] gap-2">
-                      {payingId === o.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCcw className="w-3.5 h-3.5" />}
-                      Pay Now
-                    </Button>
+
+                {/* DYNAMIC ACTION FOOTER: Handles state routing blocks */}
+                {(canRetry || isPaid) && (
+                  <div className="mt-4 pt-3 border-t border-gray-100 flex justify-end items-center gap-2">
+                    
+                    {/* WORKFLOW A FIX: Replaced HTML button element with a clear client router Link */}
+                    {isPaid && (
+                      <Link
+                        to={`/orders/${o.id}/invoice`}
+                        className="inline-flex items-center text-xs font-semibold text-blue-600 hover:text-blue-800 hover:underline bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-md px-3 py-1.5 transition-all shadow-sm"
+                      >
+                        <FileText className="w-3.5 h-3.5 mr-1.5 text-blue-600" />
+                        View Invoice
+                      </Link>
+                    )}
+
+                    {/* Pay Now Retry Trigger */}
+                    {canRetry && (
+                      <Button size="sm" onClick={() => retry(o)} disabled={payingId === o.id} className="bg-[#f7941d] hover:bg-[#e58500] gap-2">
+                        {payingId === o.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCcw className="w-3.5 h-3.5" />}
+                        Pay Now
+                      </Button>
+                    )}
+
                   </div>
                 )}
+
               </div>
             );
           })}
