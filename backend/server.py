@@ -1,12 +1,16 @@
 """Ramsboutique Vizag Clone - FastAPI backend."""
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Query
+from email.mime import application
+
+from fastapi import FastAPI, APIRouter, HTTPException, status, Depends, Query
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
+import random
 import logging
 import math
 import uuid
+import httpx
 from pathlib import Path
 from pydantic import BaseModel, Field, EmailStr
 from typing import List, Optional, Any
@@ -50,6 +54,8 @@ STORE_LAT = 17.7231
 STORE_LNG = 83.3012
 DELIVERY_RADIUS_KM = 5.0
 
+BLACKSMS_API_KEY = os.environ.get("BLACKSMS_API_KEY", "7704d6856e9ca0885ef6b1cb7df3cbb4")
+
 # Razorpay
 RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID", "")
 RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
@@ -75,11 +81,12 @@ class LoginIn(BaseModel):
     email: EmailStr
     password: str
 
+class OtpPhoneIn(BaseModel):
+    phone: str = Field(..., pattern=r"^\d{10}$")
 
-class OtpVerifyIn(BaseModel):
-    phone: str
-    otp: str
-
+class OtpCodeVerifyIn(BaseModel):
+    phone: str = Field(..., pattern=r"^\d{10}$")
+    otp: str = Field(..., min_length=4, max_length=4)
 
 class LocationCheckIn(BaseModel):
     lat: float
@@ -461,28 +468,136 @@ async def admin_login(data: LoginIn):
     token = create_token(user["id"], "admin")
     return {"token": token, "user": {"id": user["id"], "name": user["name"], "email": user["email"], "role": "admin"}}
 
+@api.post("/auth/send-otp")
+async def send_low_cost_non_dlt_sms(data: OtpPhoneIn):
+    try:
+        mobile_number = data.phone.strip()[-10:]
+        
+        # 1. CORE REQUIREMENT: Check MongoDB users collection to see if user exists
+        user_record = await db.users.find_one({"phone": mobile_number})
+        is_new_user = False
+        
+        if not user_record:
+            is_new_user = True
+            # Provision and insert a fresh customer document into MongoDB right away
+            user_record = {
+                "id": str(uuid.uuid4()),
+                "name": f"Customer {mobile_number[-4:]}",
+                "email": f"user_{mobile_number}@ramsboutique.com",
+                "phone": mobile_number,
+                "role": "user",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "status": "pending_verification"
+            }
+            await db.users.insert_one(user_record)
+
+        # 2. Generate your secure 4-digit custom verification code
+        generated_code = f"{random.randint(1000, 9999)}"
+        expiry_time = datetime.now(timezone.utc) + timedelta(minutes=5)
+
+        # 3. Persist the verification state model row securely to your MongoDB collection
+        await db.user_otps.update_one(
+            {"phone": mobile_number},
+            {
+                "$set": {
+                    "otp_code": generated_code,
+                    "expires_at": expiry_time,
+                    "is_verified": False
+                }
+            },
+            upsert=True
+        )
+
+        # 4. OFFICIAL BLACKSMS GET PROTOCOL:
+        # Route parameters must be structured directly as Query Parameters
+        clean_api_key = BLACKSMS_API_KEY.replace("Bearer ", "").strip()
+        
+        # Construct the official endpoint string with the query arguments embedded
+        blacksms_endpoint = "https://blacksms.in/sms"
+        gateway_payload = {
+            "api_key": clean_api_key,
+            "numbers": mobile_number,
+            "variables_values": generated_code,
+            "sender_id": "520",
+            "route": "1"
+        }
+        
+        headers = {
+            "Authorization": clean_api_key,
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+        }
+
+        async with httpx.AsyncClient() as client:
+            # We hit BlackSMS via a structured GET/POST query parameter request
+            response = await client.post(blacksms_endpoint, json=gateway_payload, headers=headers)
+
+            # Print response parameters safely to terminal for tracing adjustments
+            print(f"\n" + "═"*50)
+            print(f"📡 [BLACKSMS LIVE GATEWAY RESPONSE]")
+            print(f"Status Code: {response.status_code}")
+            print(f"Raw Body: {response.text}")
+            print("═"*50 + "\n")
+
+            if response.status_code != 200:
+                raise ValueError(f"Gateway HTTP Error {response.status_code}: {response.text[:100]}")
+                
+            try:
+                response_data = response.json()
+            except Exception:
+                raise ValueError(f"Server returned plain text instead of JSON: {response.text[:100]}")
+
+            if response_data.get("status") == "error" or response_data.get("status") == "failed":
+                raise ValueError(response_data.get("message", "API parameters or balance rejected."))
+
+        return {"status": "Success", "message": "OTP successfully triggered live via non-DLT channels."}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Live Gateway Error: {str(e)}")    
 
 @api.post("/auth/verify-otp")
-async def verify_otp(data: OtpVerifyIn):
-    # Mock OTP: any 4-digit code works, e.g. 1234
-    if len(data.otp) != 4 or not data.otp.isdigit():
-        raise HTTPException(400, "Invalid OTP format")
-    user = await db.users.find_one({"phone": data.phone})
-    if not user:
-        # auto-create phone user
-        user = {
-            "id": str(uuid.uuid4()),
-            "name": f"User {data.phone[-4:]}",
-            "email": f"user{data.phone}@ramsboutique.com",
-            "phone": data.phone,
-            "password": hash_password(str(uuid.uuid4())),
-            "role": "user",
-            "created_at": now_iso(),
-        }
-        await db.users.insert_one(user)
-    token = create_token(user["id"], user["role"])
-    return {"token": token, "user": {"id": user["id"], "name": user["name"], "email": user["email"], "phone": user["phone"], "role": user["role"]}}
+async def verify_otp_and_login(data: OtpCodeVerifyIn):
+    mobile = data.phone.strip()
+    user_otp = data.otp.strip()
 
+    # 1. Fetch matching entry row out of MongoDB
+    otp_record = await db.user_otps.find_one({"phone": mobile})
+    if not otp_record:
+        raise HTTPException(404, "No active session authentication record found for this number.")
+
+    # 2. Check if the code token lifetime has expired
+    current_time = datetime.now(timezone.utc)
+    record_expiry = otp_record["expires_at"].replace(tzinfo=timezone.utc)
+    if current_time > record_expiry:
+        raise HTTPException(410, "The verification code has expired. Please send a new one.")
+
+    # 3. Match code string directly inside your database records
+    if otp_record["otp_code"] != user_otp:
+        raise HTTPException(401, "Invalid code entered. Please double check.")
+
+    # 4. Clean up: Delete record row instantly to protect against code replay vectors
+    await db.user_otps.delete_one({"phone": mobile})
+
+    # 5. Retrieve full active customer entity profile data row
+    user = await db.users.find_one({"phone": mobile})
+    
+    # Flip account status flag from pending to active if they were new
+    if user.get("status") == "pending_verification":
+        await db.users.update_one({"phone": mobile}, {"$set": {"status": "active"}})
+        user["status"] = "active"
+
+    # 6. Issue authorization session context payload
+    token = create_token(user["id"], user["role"])
+    return {
+        "token": token,
+        "user": {
+            "id": user["id"],
+            "phone": user["phone"],
+            "role": user["role"],
+            "name": user.get("name", f"Customer {user['phone'][-4:]}"),
+            "email": user.get("email", f"user_{user['phone']}@ramsboutique.com")
+        }
+    }
 
 @api.get("/auth/me")
 async def me(current=Depends(get_current_user)):
