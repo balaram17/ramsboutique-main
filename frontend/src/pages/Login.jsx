@@ -10,6 +10,9 @@ import { useToast } from '../hooks/use-toast';
 import { Loader2, Truck, User } from 'lucide-react';
 import api from '../lib/api';
 import axios from 'axios';
+import { auth } from '../lib/firebase';
+import { RecaptchaVerifier, signInWithPhoneNumber } from 'firebase/auth';
+
 
 const API_BASE_URL = process.env.REACT_APP_API_BASE_URL;
 
@@ -19,6 +22,7 @@ const Login = () => {
   const [sp] = useSearchParams();
   const nextTo = sp.get('next') || '/';
   const { toast } = useToast();
+
   const [busy, setBusy] = useState(false);
   const { content } = useSiteContent();
   const l = content.login;
@@ -27,8 +31,8 @@ const Login = () => {
   const [signF, setSignF] = useState({ name: '', email: '', phone: '', password: '' });
   const [otpF, setOtpF] = useState({ phone: '', otp: '', sent: false });
   
-  // Isolated state tracking for the delivery agent phone number
   const [agentPhone, setAgentPhone] = useState('');
+  const [cooldown, setCooldown] = useState(0);
 
   const doLogin = async (e) => {
     e.preventDefault(); setBusy(true);
@@ -36,73 +40,98 @@ const Login = () => {
     catch (e) { toast({ title: 'Login failed', description: e.response?.data?.detail || 'Try again', variant: 'destructive' }); }
     finally { setBusy(false); }
   };
+
   const doSignup = async (e) => {
     e.preventDefault(); setBusy(true);
     try { await signup(signF); nav(nextTo); }
     catch (e) { toast({ title: 'Signup failed', description: e.response?.data?.detail || 'Try again', variant: 'destructive' }); }
     finally { setBusy(false); }
   };
-  const sendOtp = () => {
+
+  React.useEffect(() => {
+  if (cooldown > 0) {
+    const timer = setTimeout(() => setCooldown(cooldown - 1), 1000);
+    return () => clearTimeout(timer);
+  }
+}, [cooldown]);
+
+  // 1. Direct Backend Endpoint Call: Sends the OTP without reCAPTCHA checks
+  const sendOtp = async () => {
     if (otpF.phone.length !== 10) return toast({ title: 'Enter 10-digit phone', variant: 'destructive' });
-    setOtpF({ ...otpF, sent: true });
-    toast({ title: 'OTP Sent (Demo)', description: 'Use any 4-digit code, e.g. 1234' });
+    
+    setBusy(true);
+    try {
+      await axios.post(`${API_BASE_URL}/api/auth/send-otp`, {
+        phone: otpF.phone
+      });
+
+      setOtpF({ ...otpF, sent: true });
+      setCooldown(60);
+      toast({ title: 'OTP Sent!', description: 'Please check your mobile text messages.' });
+    } catch (err) {
+      toast({
+        title: 'Delivery Failed',
+        description: err.response?.data?.detail || 'Something went wrong.',
+        variant: 'destructive'
+      });
+    } finally {
+      setBusy(false);
+    }
   };
+
+  // 2. Submits User Token String Directly to Your FastAPI Instance
   const doVerify = async (e) => {
-    e.preventDefault(); setBusy(true);
-    try { await verifyOtp(otpF.phone, otpF.otp); nav(nextTo); }
-    catch (e) { toast({ title: 'OTP verification failed', description: e.response?.data?.detail || 'Try again', variant: 'destructive' }); }
-    finally { setBusy(false); }
+    e.preventDefault();
+    if (otpF.otp.length < 4) return toast({ title: 'Enter validation code', variant: 'destructive' });
+
+    setBusy(true);
+    try {
+      await verifyOtp(otpF.phone, otpF.otp);
+      toast({ title: 'Login Successful', description: 'Welcome back!' });
+      nav(nextTo);
+    } catch (err) {
+      toast({
+        title: 'Verification Failed',
+        description: err.response?.data?.detail || 'Invalid code entered.',
+        variant: 'destructive'
+      });
+    } finally {
+      setBusy(false);
+    }
   };
 
-  // =========================================================
-  // UPDATED: INSTANT AGENT LOGIN ROUTINE (NO OTP REQUIRED)
-  // =========================================================
-  
-  //const API_BASE_URL = process.env.REACT_APP_API_BASE_URL
-
-  const doAgentLogin = async (e) => {
-  e.preventDefault();
-
-  if (agentPhone.length !== 10) {
-    return toast({
-      title: 'Validation Error',
-      description: 'Enter a valid 10-digit mobile number.',
-      variant: 'destructive',
-    });
-  }
-
-  setBusy(true);
-
-  try {
-    // Call backend API
-    const res = await axios.post(`${API_BASE_URL}/api/auth/agent`, {
-      phone: agentPhone,
-    });
-
-    // Store session data
-    localStorage.setItem('agentToken', res.data.token);
-    localStorage.setItem('agentId', res.data.agent_id);
-    localStorage.setItem('agentName', res.data.name);
-
-    toast({
-      title: 'Login Successful',
-      description: `Welcome back, ${res.data.name}!`,
-    });
-
-    // Redirect to dashboard
-    nav('/agent/dashboard');
-  } catch (err) {
-    toast({
-      title: 'Access Denied',
-      description:
-        err.response?.data?.detail ||
-        'Mobile number not found in Agent collection.',
-      variant: 'destructive',
-    });
-  } finally {
-    setBusy(false);
-  }
-};
+const doAgentLogin = async (e) => {
+    e.preventDefault();
+    if (agentPhone.length !== 10) {
+      return toast({
+        title: 'Validation Error',
+        description: 'Enter a valid 10-digit mobile number.',
+        variant: 'destructive',
+      });
+    }
+    setBusy(true);
+    try {
+      const res = await axios.post(`${API_BASE_URL}/api/auth/agent`, {
+        phone: agentPhone,
+      });
+      localStorage.setItem('agentToken', res.data.token);
+      localStorage.setItem('agentId', res.data.agent_id);
+      localStorage.setItem('agentName', res.data.name);
+      toast({
+        title: 'Login Successful',
+        description: `Welcome back, ${res.data.name}!`,
+      });
+      nav('/agent/dashboard');
+    } catch (err) {
+      toast({
+        title: 'Access Denied',
+        description: err.response?.data?.detail || 'Mobile number not found in Agent collection.',
+        variant: 'destructive',
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <div className="min-h-[80vh] flex items-center justify-center px-4 py-10 bg-gray-50">
@@ -144,16 +173,38 @@ const Login = () => {
 
           <TabsContent value="otp">
             <form onSubmit={doVerify} className="space-y-3 mt-3">
-              <div><Label>Phone</Label><Input required value={otpF.phone} maxLength={10} onChange={(e) => setOtpF({ ...otpF, phone: e.target.value.replace(/\D/g, '') })} /></div>
+              <div>
+                <Label>Phone Number</Label>
+                <Input required disabled={busy || otpF.sent} value={otpF.phone} maxLength={10} placeholder="Enter 10-digit mobile number" onChange={(e) => setOtpF({ ...otpF, phone: e.target.value.replace(/\D/g, '') })} />
+              </div>
+
               {!otpF.sent ? (
-                <Button type="button" onClick={sendOtp} className="w-full bg-[#6b3410] hover:bg-[#4d260b]">Send OTP</Button>
+                <Button type="button" onClick={sendOtp} disabled={busy} className="w-full bg-[#6b3410] hover:bg-[#4d260b]">
+                  {busy && <Loader2 className="w-4 h-4 mr-2 animate-spin" />} Send OTP Code
+                </Button>
               ) : (
                 <>
-                  <div><Label>Enter 4-digit OTP</Label><Input required maxLength={4} value={otpF.otp} onChange={(e) => setOtpF({ ...otpF, otp: e.target.value.replace(/\D/g, '') })} /></div>
-                  <Button type="submit" disabled={busy} className="w-full bg-[#f7941d] hover:bg-[#e58500]">{busy && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}Verify & Continue</Button>
+                  <div>
+                    <Label>Enter Secure 4-Digit OTP</Label>
+                    {/* Ensure maxLength matches your backend string generation */}
+                    <Input required disabled={busy} maxLength={4} placeholder="Enter 4-digit code" value={otpF.otp} onChange={(e) => setOtpF({ ...otpF, otp: e.target.value.replace(/\D/g, '') })} />
+                  </div>
+
+                  <Button type="submit" disabled={busy} className="w-full bg-[#f7941d] hover:bg-[#e58500]">
+                    {busy && <Loader2 className="w-4 h-4 mr-2 animate-spin" />} Confirm & Sign In
+                  </Button>
+
+                  <div className="text-center mt-2">
+                    {cooldown > 0 ? (
+                      <p className="text-xs text-gray-400">Resend code available in: <span className="font-bold">{cooldown}s</span></p>
+                    ) : (
+                      <button type="button" onClick={sendOtp} disabled={busy} className="text-xs text-[#6b3410] hover:underline font-medium">Resend OTP</button>
+                    )}
+                  </div>
+
+                  <button type="button" onClick={() => setOtpF({ ...otpF, sent: false, otp: '' })} className="text-xs text-gray-400 block mx-auto underline mt-2">Change Phone Number</button>
                 </>
               )}
-              <div className="text-xs text-gray-500 flex items-center gap-1 justify-center">🛡️ Demo: any 4-digit code works</div>
             </form>
           </TabsContent>
 
@@ -162,26 +213,15 @@ const Login = () => {
               <div>
                 <Label>Registered Phone Number</Label>
                 <div className="relative flex rounded-md mt-1">
-                  <Input 
-                    required 
-                    disabled={busy}
-                    placeholder="Enter 10-digit number" 
-                    value={agentPhone} 
-                    maxLength={10} 
+                  <Input required disabled={busy} placeholder="Enter 10-digit number" value={agentPhone} maxLength={10} 
                     onChange={(e) => setAgentPhone(e.target.value.replace(/\D/g, ''))} 
                   />
                 </div>
               </div>
-              
-              <Button 
-                type="submit" 
-                disabled={busy} 
-                className="w-full bg-[#6b3410] hover:bg-[#4d260b]"
-              >
+              <Button type="submit" disabled={busy} className="w-full bg-[#6b3410] hover:bg-[#4d260b]">
                 {busy && <Loader2 className="w-full bg-[#6b3410] hover:bg-[#4d260b]" />} Verify & Sign In
               </Button>
-              <div className="text-xs text-gray-400 text-center mt-1">
-                The portal will instantly cross-reference our delivery worker network and log you in.
+              <div className="text-xs text-gray-400 text-center mt-1">The portal will instantly cross-reference our delivery worker network and log you in.
               </div>
             </form>
           </TabsContent>

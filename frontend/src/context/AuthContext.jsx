@@ -47,12 +47,16 @@ export const AuthProvider = ({ children }) => {
     return data.user;
   }, []);
 
-  const verifyOtp = useCallback(async (phone, otp) => {
-    const { data } = await api.post('/auth/verify-otp', { phone, otp });
-    storeToken(data.token);
-    setUser(data.user);
-    return data.user;
-  }, []);
+const verifyOtp = useCallback(async (phone, otp) => {
+  // Directly fires values to your self-managed FastAPI routes
+  const { data } = await api.post('/auth/verify-otp', { 
+    phone: phone, 
+    otp: otp 
+  });
+  storeToken(data.token);
+  setUser(data.user);
+  return data.user;
+}, []);
 
   const logout = useCallback(() => {
     clearToken();
