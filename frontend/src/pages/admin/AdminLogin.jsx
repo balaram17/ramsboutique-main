@@ -30,12 +30,12 @@ const AdminLogin = () => {
           <p className="text-sm text-gray-500 mt-1">Vizag Store Management Portal</p>
         </div>
         <form onSubmit={submit} className="space-y-4">
-          <div><Label>Email</Label><Input type="email" required autoComplete="username" placeholder="admin@ramsboutique.com" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></div>
+          <div><Label>Email</Label><Input type="email" required autoComplete="username" placeholder="Enter Admin Email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></div>
           <div><Label>Password</Label><Input type="password" required autoComplete="current-password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} /></div>
           <Button type="submit" disabled={busy} className="w-full bg-[#6b3410] hover:bg-[#4d260b]">{busy && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}Sign in as Admin</Button>
         </form>
         <div className="mt-4 text-xs text-center text-gray-500">
-          Demo: admin@ramsboutique.com / admin123<br />
+          {/* Demo: admin@ramsboutique.com / admin123 */}
           <Link to="/" className="hover:underline">← Back to shop</Link>
         </div>
       </div>
