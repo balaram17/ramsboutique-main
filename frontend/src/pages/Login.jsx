@@ -10,9 +10,6 @@ import { useToast } from '../hooks/use-toast';
 import { Loader2, Truck, User } from 'lucide-react';
 import api from '../lib/api';
 import axios from 'axios';
-import { auth } from '../lib/firebase';
-import { RecaptchaVerifier, signInWithPhoneNumber } from 'firebase/auth';
-
 
 const API_BASE_URL = process.env.REACT_APP_API_BASE_URL;
 
@@ -33,6 +30,7 @@ const Login = () => {
   
   const [agentPhone, setAgentPhone] = useState('');
   const [cooldown, setCooldown] = useState(0);
+  const [activeTab, setActiveTab] = useState(sp.get('tab') || 'login');
 
   const doLogin = async (e) => {
     e.preventDefault(); setBusy(true);
@@ -69,11 +67,37 @@ const Login = () => {
       setCooldown(60);
       toast({ title: 'OTP Sent!', description: 'Please check your mobile text messages.' });
     } catch (err) {
-      toast({
-        title: 'Delivery Failed',
-        description: err.response?.data?.detail || 'Something went wrong.',
-        variant: 'destructive'
-      });
+      const message = err.response?.data?.detail || 'Something went wrong.';
+
+      // FastAPI returns HTTP 404 when the mobile number is not registered.
+      // Check the status first rather than relying only on the exact error text.
+      if (
+        err.response?.status === 404 ||
+        message === 'The Mobile number is not registered. Kindly, Signup'
+      ) {
+        const phone = otpF.phone;
+
+        // Reset OTP state.
+        setOtpF({ phone, otp: '', sent: false });
+
+        // Carry the entered mobile number into the Signup form.
+        setSignF((prev) => ({ ...prev, phone }));
+
+        // Switch the controlled Tabs component to Signup.
+        setActiveTab('signup');
+
+        toast({
+          title: 'Mobile number not registered',
+          description: 'The Mobile number is not registered. Kindly, Signup',
+          variant: 'destructive'
+        });
+      } else {
+        toast({
+          title: 'Delivery Failed',
+          description: message,
+          variant: 'destructive'
+        });
+      }
     } finally {
       setBusy(false);
     }
@@ -145,7 +169,7 @@ const doAgentLogin = async (e) => {
           <p className="text-sm text-gray-500">{l.subheading}</p>
         </div>
 
-        <Tabs defaultValue="login">
+        <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList className="grid w-full grid-cols-4">
             <TabsTrigger value="login">Login</TabsTrigger>
             <TabsTrigger value="signup">Sign up</TabsTrigger>

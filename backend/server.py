@@ -473,23 +473,13 @@ async def send_low_cost_non_dlt_sms(data: OtpPhoneIn):
     try:
         mobile_number = data.phone.strip()[-10:]
         
-        # 1. CORE REQUIREMENT: Check MongoDB users collection to see if user exists
-        user_record = await db.users.find_one({"phone": mobile_number})
-        is_new_user = False
-        
+        # 1. OTP LOGIN IS ONLY FOR EXISTING CUSTOMERS.
+        # Cross-check the users collection BEFORE generating/sending any OTP.
+        # IMPORTANT: Do NOT create a user record here. New customers must use Signup.
+        user_record = await db.users.find_one({"phone": mobile_number, "role": "user"})
+
         if not user_record:
-            is_new_user = True
-            # Provision and insert a fresh customer document into MongoDB right away
-            user_record = {
-                "id": str(uuid.uuid4()),
-                "name": f"Customer {mobile_number[-4:]}",
-                "email": f"user_{mobile_number}@ramsboutique.com",
-                "phone": mobile_number,
-                "role": "user",
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "status": "pending_verification"
-            }
-            await db.users.insert_one(user_record)
+            raise HTTPException(404, "The Mobile number is not registered. Kindly, Signup")
 
         # 2. Generate your secure 4-digit custom verification code
         generated_code = f"{random.randint(1000, 9999)}"
@@ -578,13 +568,11 @@ async def verify_otp_and_login(data: OtpCodeVerifyIn):
     # 4. Clean up: Delete record row instantly to protect against code replay vectors
     await db.user_otps.delete_one({"phone": mobile})
 
-    # 5. Retrieve full active customer entity profile data row
-    user = await db.users.find_one({"phone": mobile})
-    
-    # Flip account status flag from pending to active if they were new
-    if user.get("status") == "pending_verification":
-        await db.users.update_one({"phone": mobile}, {"$set": {"status": "active"}})
-        user["status"] = "active"
+    # 5. Retrieve the existing customer record.
+    # OTP verification must NEVER create a user account.
+    user = await db.users.find_one({"phone": mobile, "role": "user"})
+    if not user:
+        raise HTTPException(404, "The Mobile number is not registered. Kindly, Signup")
 
     # 6. Issue authorization session context payload
     token = create_token(user["id"], user["role"])
