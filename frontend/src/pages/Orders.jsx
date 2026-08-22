@@ -80,7 +80,13 @@ const Orders = () => {
                 <div className="mt-3 flex flex-wrap gap-3 items-center">
                   <div className="flex -space-x-2">
                     {o.items.slice(0, 4).map((it) => (
-                      <img key={`${o.id}-${it.product_id}`} src={it.image} alt="" className="w-10 h-10 rounded-full border-2 border-white bg-gray-100 object-cover" />
+                      // 👇 UPDATED: Appended unit parameters onto your tracking key index to prevent duplicate key warning loops
+                      <img 
+                        key={`${o.id}-${it.product_id}-${it.unit || 'base'}`} 
+                        src={it.image} 
+                        alt="" 
+                        className="w-10 h-10 rounded-full border-2 border-white bg-gray-100 object-cover" 
+                      />
                     ))}
                   </div>
                   <div className="text-sm text-gray-600">{o.items.length} items • {o.payment_method}</div>
@@ -88,11 +94,9 @@ const Orders = () => {
                   <div className="ml-auto font-bold">{inr(o.total)}</div>
                 </div>
 
-                {/* DYNAMIC ACTION FOOTER: Handles state routing blocks */}
                 {(canRetry || isPaid) && (
                   <div className="mt-4 pt-3 border-t border-gray-100 flex justify-end items-center gap-2">
                     
-                    {/* WORKFLOW A FIX: Replaced HTML button element with a clear client router Link */}
                     {isPaid && (
                       <Link
                         to={`/orders/${o.id}/invoice`}
@@ -103,7 +107,6 @@ const Orders = () => {
                       </Link>
                     )}
 
-                    {/* Pay Now Retry Trigger */}
                     {canRetry && (
                       <Button size="sm" onClick={() => retry(o)} disabled={payingId === o.id} className="bg-[#f7941d] hover:bg-[#e58500] gap-2">
                         {payingId === o.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCcw className="w-3.5 h-3.5" />}

@@ -14,6 +14,7 @@ export const CartProvider = ({ children }) => {
     try { localStorage.setItem(CART_KEY, JSON.stringify(items)); } catch (_) { /* storage disabled */ }
   }, [items]);
 
+  // Updated to track split compound keys (e.g. "product123-500g")
   const add = useCallback((product, qty = 1) => {
     setItems((prev) => {
       const ex = prev.find((i) => i.product.id === product.id);
@@ -38,13 +39,13 @@ export const CartProvider = ({ children }) => {
   const { subtotal, totalMrp, count } = useMemo(() => {
     let s = 0, m = 0, c = 0;
     for (const i of items) {
-      s += i.product.price * i.qty;
-      m += i.product.mrp * i.qty;
+      s += (Number(i.product.price) || 0) * i.qty;
+      m += (Number(i.product.mrp) || 0) * i.qty;
       c += i.qty;
     }
     return { subtotal: s, totalMrp: m, count: c };
   }, [items]);
-  const savings = totalMrp - subtotal;
+  const savings = Math.max(0, totalMrp - subtotal);
 
   const value = useMemo(
     () => ({ items, add, remove, update, clear, subtotal, savings, count }),

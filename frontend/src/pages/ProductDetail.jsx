@@ -10,13 +10,49 @@ const ProductDetail = () => {
   const { id } = useParams();
   const nav = useNavigate();
   const [p, setP] = useState(null);
+  
+  // Track the currently selected variant object (null if product has no variants)
+  const [selectedVariant, setSelectedVariant] = useState(null);
+  
   const { items, add, update } = useCart();
-  const inCart = items.find((i) => i.product.id === id);
 
-  useEffect(() => { api.get(`/products/${id}`).then((r) => setP(r.data)); }, [id]);
+  useEffect(() => { 
+    api.get(`/products/${id}`).then((r) => {
+      setP(r.data);
+      // Automatically default to the first variant if available
+      if (r.data.variants && r.data.variants.length > 0) {
+        setSelectedVariant(r.data.variants[0]);
+      }
+    }); 
+  }, [id]);
 
   if (!p) return <div className="max-w-7xl mx-auto px-4 py-16 text-center text-gray-500">Loading...</div>;
-  const discount = Math.round(((p.mrp - p.price) / p.mrp) * 100);
+
+  // Compute active product details based on variant or base fallback parameters
+  const currentUnit = selectedVariant ? selectedVariant.unit : p.unit;
+  const currentPrice = selectedVariant ? selectedVariant.price : p.price;
+  const currentMrp = selectedVariant ? selectedVariant.mrp : p.mrp;
+  
+  // Unique identification string key for the cart items (matches base or variant combination)
+  const cartItemKey = selectedVariant ? `${p.id}-${selectedVariant.unit}` : p.id;
+  const inCart = items.find((i) => i.cartItemId === cartItemKey || i.product.id === cartItemKey);
+
+  const discount = Math.round(((currentMrp - currentPrice) / currentMrp) * 100);
+
+  // Helper routine to format standard structure item payload safely over to the context state
+  const handleAddToCart = () => {
+    const customProductPayload = {
+      ...p,
+      // Map custom unique identification details to keep items cleanly separated
+      id: cartItemKey, 
+      baseProductId: p.id,
+      unit: currentUnit,
+      price: currentPrice,
+      mrp: currentMrp,
+      isVariant: !!selectedVariant
+    };
+    add(customProductPayload);
+  };
 
   return (
     <div className="max-w-7xl mx-auto px-4 py-6">
@@ -30,14 +66,41 @@ const ProductDetail = () => {
         <div>
           <div className="text-xs text-gray-500 uppercase tracking-wide">{p.brand}</div>
           <h1 className="text-2xl font-bold text-gray-900 mt-1">{p.name}</h1>
-          <div className="text-sm text-gray-500 mt-1">{p.unit}</div>
+          <div className="text-sm text-gray-500 mt-1">{currentUnit}</div>
 
           <div className="flex items-baseline gap-3 mt-4">
-            <div className="text-3xl font-black text-gray-900">{inr(p.price)}</div>
-            {p.mrp > p.price && <div className="text-lg text-gray-400 line-through">{inr(p.mrp)}</div>}
+            <div className="text-3xl font-black text-gray-900">{inr(currentPrice)}</div>
+            {currentMrp > currentPrice && <div className="text-lg text-gray-400 line-through">{inr(currentMrp)}</div>}
             {discount > 0 && <div className="bg-amber-100 text-amber-900 text-xs font-bold px-2 py-1 rounded">{discount}% OFF</div>}
           </div>
           <div className="text-xs text-gray-500 mt-1">Inclusive of all taxes</div>
+
+          {/* Dynamic Interactive Variants Selector Buttons */}
+          {p.variants && p.variants.length > 0 && (
+            <div className="mt-6">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500 mb-2">Select Variant Option:</h3>
+              <div className="flex flex-wrap gap-2">
+                {p.variants.map((v, i) => {
+                  const isSelected = selectedVariant?.unit === v.unit;
+                  return (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => setSelectedVariant(v)}
+                      className={`px-4 py-2 text-sm rounded-md font-medium border transition-all ${
+                        isSelected
+                          ? 'border-[#6b3410] bg-[#6b3410]/5 text-[#6b3410] ring-1 ring-[#6b3410]'
+                          : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300'
+                      }`}
+                    >
+                      <div className="font-semibold">{v.unit}</div>
+                      <div className="text-xs opacity-80">{inr(v.price)}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           <div className="mt-6 border-t border-b border-gray-200 py-4">
             <h3 className="font-semibold text-sm mb-2">Product Description</h3>
@@ -47,14 +110,22 @@ const ProductDetail = () => {
           <div className="flex gap-3 mt-6">
             {inCart ? (
               <div className="flex items-center gap-3 border-2 border-[#6b3410] rounded-md">
-                <button onClick={() => update(p.id, inCart.qty - 1)} className="px-3 py-2"><Minus className="w-4 h-4" /></button>
+                <button onClick={() => update(cartItemKey, inCart.qty - 1)} className="px-3 py-2"><Minus className="w-4 h-4" /></button>
                 <span className="font-semibold min-w-[24px] text-center">{inCart.qty}</span>
-                <button onClick={() => update(p.id, inCart.qty + 1)} className="px-3 py-2"><Plus className="w-4 h-4" /></button>
+                <button onClick={() => update(cartItemKey, inCart.qty + 1)} className="px-3 py-2"><Plus className="w-4 h-4" /></button>
               </div>
             ) : (
-              <Button onClick={() => add(p)} className="bg-[#6b3410] hover:bg-[#4d260b] gap-2"><ShoppingCart className="w-4 h-4" /> Add to Cart</Button>
+              <Button onClick={handleAddToCart} className="bg-[#6b3410] hover:bg-[#4d260b] gap-2"><ShoppingCart className="w-4 h-4" /> Add to Cart</Button>
             )}
-            <Button onClick={() => { if (!inCart) add(p); nav('/cart'); }} className="bg-[#f7941d] hover:bg-[#e58500] gap-2"><Zap className="w-4 h-4" /> Buy Now</Button>
+            <Button 
+              onClick={() => { 
+                if (!inCart) handleAddToCart(); 
+                nav('/cart'); 
+              }} 
+              className="bg-[#f7941d] hover:bg-[#e58500] gap-2"
+            >
+              <Zap className="w-4 h-4" /> Buy Now
+            </Button>
           </div>
 
           <div className="mt-6 grid grid-cols-3 gap-3 text-xs">

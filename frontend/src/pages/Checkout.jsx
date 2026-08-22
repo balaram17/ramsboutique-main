@@ -49,14 +49,21 @@ const Checkout = () => {
     setPlacing(true);
     try {
       const payload = {
-        items: items.map((i) => ({ product_id: i.product.id, qty: i.qty })),
+        // 👇 UPDATED: Extracts the true base product UUID and appends the specific variant unit string
+        items: items.map((i) => ({ 
+          product_id: i.product.baseProductId || i.product.id, 
+          qty: i.qty,
+          unit: i.product.unit,
+          price: Number(i.product.price) || 0,
+          mrp: Number(i.product.mrp) || 0
+        })),
         address: { ...addr, city: 'Visakhapatnam', lat: location.lat, lng: location.lng },
         payment_method: payment,
         note,
         coupon_code: appliedCoupon?.code || null,
       };
       const { data } = await api.post('/orders', payload);
-      // For online payments, open Razorpay modal
+      
       if (payment === 'UPI' || payment === 'CARD') {
         try {
           await openRazorpayCheckout({
@@ -135,7 +142,14 @@ const Checkout = () => {
         <h2 className="font-bold mb-3">Order Summary</h2>
         <ul className="space-y-2 text-sm mb-3 max-h-52 overflow-y-auto">
           {items.map(({ product, qty }) => (
-            <li key={product.id} className="flex justify-between"><span className="line-clamp-1 pr-2">{product.name} × {qty}</span><span>{inr(product.price * qty)}</span></li>
+            // 👇 UPDATED: Display variant units next to name strings for clearer scannability
+            <li key={product.id} className="flex justify-between border-b border-dashed pb-1.5 last:border-0">
+              <span className="line-clamp-1 pr-2 flex flex-col">
+                <span className="font-medium text-gray-800">{product.name}</span>
+                <span className="text-[11px] text-gray-400">Option: {product.unit} × {qty}</span>
+              </span>
+              <span className="font-mono text-gray-700">{inr(product.price * qty)}</span>
+            </li>
           ))}
         </ul>
         <div className="border-t pt-3 space-y-2 text-sm">

@@ -1,6 +1,5 @@
 """Ramsboutique Vizag Clone - FastAPI backend."""
 from email.mime import application
-
 from fastapi import FastAPI, APIRouter, HTTPException, status, Depends, Query
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -15,7 +14,6 @@ from pathlib import Path
 from pydantic import BaseModel, Field, EmailStr
 from typing import List, Optional, Any
 from datetime import datetime, timezone, timedelta
-
 
 from auth_utils import (
     hash_password, verify_password, create_token,
@@ -107,7 +105,9 @@ class Address(BaseModel):
 class CartItem(BaseModel):
     product_id: str
     qty: int
-
+    unit: Optional[str] = None 
+    price: Optional[float] = None
+    mrp: Optional[float] = None
 
 class CheckoutIn(BaseModel):
     items: List[CartItem]
@@ -118,10 +118,19 @@ class CheckoutIn(BaseModel):
 
 
 class OrderStatusUpdate(BaseModel):
-    status:Optional[str] = None # placed, packed, out_for_delivery, delivered, cancelled
+    status: Optional[str] = None 
     agent_id: Optional[str] = None
 
 
+# 1. Schema validation model for individual product variants
+class VariantItem(BaseModel):
+    unit: str
+    price: float
+    mrp: float
+    stock: int = 100
+
+
+# 2. Embedded the variants array into your product input schema
 class ProductIn(BaseModel):
     name: str
     brand: str
@@ -133,6 +142,7 @@ class ProductIn(BaseModel):
     image: str
     desc: str
     stock: int = 100
+    variants: Optional[List[VariantItem]] = []
 
 
 class AgentIn(BaseModel):
@@ -310,7 +320,6 @@ async def send_web_push(subscription: dict, title: str, body: str, url: str = "/
         )
     except Exception as e:
         logging.warning(f"Push failed: {e}")
-        # cleanup expired subscription
         try:
             if "410" in str(e) or "404" in str(e):
                 await db.push_subs.delete_one({"endpoint": subscription["endpoint"]})
@@ -359,7 +368,6 @@ async def seed_db():
             await db.categories.insert_one({"id": c["slug"], "order": idx, **c})
         logging.info("Seeded categories")
     else:
-        # backfill order for existing categories that don't have one
         async for doc in db.categories.find({"order": {"$exists": False}}):
             await db.categories.update_one({"_id": doc["_id"]}, {"$set": {"order": 999}})
 
@@ -380,7 +388,6 @@ async def seed_db():
 
     # Default admin
     if not await db.users.find_one({"email": "admin@ramsboutique.com"}):
-        # remove any old admin
         await db.users.delete_many({"role": "admin"})
         await db.users.insert_one({
             "id": str(uuid.uuid4()),
@@ -434,18 +441,13 @@ async def login(data: LoginIn):
 @api.post("/auth/agent")
 async def agent(data: LoginAgentIn):
     phone = data.phone.strip()
-
-    # Search using the correct field name
     user = await db.agents.find_one({
         "phone": phone,
         "active": True
     })
-
     if not user:
         raise HTTPException(401, "Mobile number not found in Agent collection.")
-
     token = create_token(user["id"], "agent")
-
     return {
         "token": token,
         "agent_id": user["id"],
@@ -454,7 +456,6 @@ async def agent(data: LoginAgentIn):
         "role": "agent"
     }
 
-# TEMP DEBUG
 @api.get("/debug/agents")
 async def debug_agents():
     docs = await db.agents.find().to_list(100)
@@ -472,20 +473,11 @@ async def admin_login(data: LoginIn):
 async def send_low_cost_non_dlt_sms(data: OtpPhoneIn):
     try:
         mobile_number = data.phone.strip()[-10:]
-        
-        # 1. OTP LOGIN IS ONLY FOR EXISTING CUSTOMERS.
-        # Cross-check the users collection BEFORE generating/sending any OTP.
-        # IMPORTANT: Do NOT create a user record here. New customers must use Signup.
         user_record = await db.users.find_one({"phone": mobile_number, "role": "user"})
-
         if not user_record:
             raise HTTPException(404, "The Mobile number is not registered. Kindly, Signup")
-
-        # 2. Generate your secure 4-digit custom verification code
         generated_code = f"{random.randint(1000, 9999)}"
         expiry_time = datetime.now(timezone.utc) + timedelta(minutes=5)
-
-        # 3. Persist the verification state model row securely to your MongoDB collection
         await db.user_otps.update_one(
             {"phone": mobile_number},
             {
@@ -497,12 +489,7 @@ async def send_low_cost_non_dlt_sms(data: OtpPhoneIn):
             },
             upsert=True
         )
-
-        # 4. OFFICIAL BLACKSMS GET PROTOCOL:
-        # Route parameters must be structured directly as Query Parameters
         clean_api_key = BLACKSMS_API_KEY.replace("Bearer ", "").strip()
-        
-        # Construct the official endpoint string with the query arguments embedded
         blacksms_endpoint = "https://blacksms.in/sms"
         gateway_payload = {
             "api_key": clean_api_key,
@@ -511,37 +498,27 @@ async def send_low_cost_non_dlt_sms(data: OtpPhoneIn):
             "sender_id": "520",
             "route": "1"
         }
-        
         headers = {
             "Authorization": clean_api_key,
             "Content-Type": "application/json",
             "Accept": "application/json"
         }
-
         async with httpx.AsyncClient() as client:
-            # We hit BlackSMS via a structured GET/POST query parameter request
             response = await client.post(blacksms_endpoint, json=gateway_payload, headers=headers)
-
-            # Print response parameters safely to terminal for tracing adjustments
             print(f"\n" + "═"*50)
             print(f"📡 [BLACKSMS LIVE GATEWAY RESPONSE]")
             print(f"Status Code: {response.status_code}")
             print(f"Raw Body: {response.text}")
             print("═"*50 + "\n")
-
             if response.status_code != 200:
                 raise ValueError(f"Gateway HTTP Error {response.status_code}: {response.text[:100]}")
-                
             try:
                 response_data = response.json()
             except Exception:
                 raise ValueError(f"Server returned plain text instead of JSON: {response.text[:100]}")
-
             if response_data.get("status") == "error" or response_data.get("status") == "failed":
                 raise ValueError(response_data.get("message", "API parameters or balance rejected."))
-
         return {"status": "Success", "message": "OTP successfully triggered live via non-DLT channels."}
-
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Live Gateway Error: {str(e)}")    
 
@@ -549,32 +526,19 @@ async def send_low_cost_non_dlt_sms(data: OtpPhoneIn):
 async def verify_otp_and_login(data: OtpCodeVerifyIn):
     mobile = data.phone.strip()
     user_otp = data.otp.strip()
-
-    # 1. Fetch matching entry row out of MongoDB
     otp_record = await db.user_otps.find_one({"phone": mobile})
     if not otp_record:
         raise HTTPException(404, "No active session authentication record found for this number.")
-
-    # 2. Check if the code token lifetime has expired
     current_time = datetime.now(timezone.utc)
     record_expiry = otp_record["expires_at"].replace(tzinfo=timezone.utc)
     if current_time > record_expiry:
         raise HTTPException(410, "The verification code has expired. Please send a new one.")
-
-    # 3. Match code string directly inside your database records
     if otp_record["otp_code"] != user_otp:
         raise HTTPException(401, "Invalid code entered. Please double check.")
-
-    # 4. Clean up: Delete record row instantly to protect against code replay vectors
     await db.user_otps.delete_one({"phone": mobile})
-
-    # 5. Retrieve the existing customer record.
-    # OTP verification must NEVER create a user account.
     user = await db.users.find_one({"phone": mobile, "role": "user"})
     if not user:
         raise HTTPException(404, "The Mobile number is not registered. Kindly, Signup")
-
-    # 6. Issue authorization session context payload
     token = create_token(user["id"], user["role"])
     return {
         "token": token,
@@ -757,8 +721,7 @@ async def rzp_create_order(data: RazorpayCreateIn, current=Depends(get_current_u
         raise HTTPException(400, "This order is not for online payment")
     if order.get("payment_status") == "paid":
         raise HTTPException(400, "Order already paid")
-
-    amount_paise = int(round(order["total"] * 100))
+    amount_paise = int(round(float(order["total"]) * 100))
     try:
         rzp_order = _rzp.order.create({
             "amount": amount_paise,
@@ -768,13 +731,13 @@ async def rzp_create_order(data: RazorpayCreateIn, current=Depends(get_current_u
             "notes": {
                 "internal_order_id": order["id"],
                 "user_id": current["user_id"],
+                "total_charged": str(order["total"]),
                 "store": "Rams Boutique Vizag",
             },
         })
     except Exception as e:
         logging.exception("Razorpay order.create failed")
         raise HTTPException(500, f"Razorpay error: {e}")
-
     await db.orders.update_one(
         {"id": data.order_id},
         {"$set": {"razorpay_order_id": rzp_order["id"], "razorpay_amount": amount_paise}},
@@ -797,7 +760,6 @@ async def rzp_verify(data: RazorpayVerifyIn, current=Depends(get_current_user)):
         raise HTTPException(404, "Order not found")
     if order["user_id"] != current["user_id"]:
         raise HTTPException(403, "Forbidden")
-
     try:
         _rzp.utility.verify_payment_signature({
             "razorpay_order_id": data.razorpay_order_id,
@@ -808,7 +770,6 @@ async def rzp_verify(data: RazorpayVerifyIn, current=Depends(get_current_user)):
         logging.warning(f"Razorpay signature verification failed: {e}")
         await db.orders.update_one({"id": data.order_id}, {"$set": {"payment_status": "failed"}})
         raise HTTPException(400, "Payment signature verification failed")
-
     await db.orders.update_one(
         {"id": data.order_id},
         {"$set": {
@@ -832,7 +793,6 @@ async def rzp_verify(data: RazorpayVerifyIn, current=Depends(get_current_user)):
 
 @api.post("/payments/razorpay/cancel")
 async def rzp_cancel(data: RazorpayCreateIn, current=Depends(get_current_user)):
-    """Marks a Razorpay attempt as cancelled (user closed the modal / payment failed)."""
     order = await db.orders.find_one({"id": data.order_id})
     if not order or order["user_id"] != current["user_id"]:
         raise HTTPException(404, "Order not found")
@@ -855,7 +815,6 @@ async def list_banners():
 async def get_site_content():
     doc = await db.site_content.find_one({"id": "site"})
     if not doc:
-        # fallback to defaults if not seeded
         return DEFAULT_SITE_CONTENT
     return clean(doc)
 
@@ -892,54 +851,58 @@ async def get_product(pid: str):
         raise HTTPException(404, "Product not found")
     return clean(doc)
 
-
-# ============ ORDERS (User) ============
+# ============ DYNAMIC VARIANT-AWARE ORDER ROUTE ============
 @api.post("/orders")
 async def create_order(data: CheckoutIn, current=Depends(get_current_user)):
-    # store hours check
     hours = await get_store_hours()
     open_now, msg = is_store_open(hours)
-    if not open_now:
-        raise HTTPException(400, msg)
+    if not open_now: raise HTTPException(400, msg)
 
-    # validate delivery radius
     dist = haversine_km(STORE_LAT, STORE_LNG, data.address.lat, data.address.lng)
-    if dist > DELIVERY_RADIUS_KM:
-        raise HTTPException(400, f"Address is {round(dist,2)} km away. We deliver within {DELIVERY_RADIUS_KM} km.")
+    if dist > DELIVERY_RADIUS_KM: raise HTTPException(400, "Too far away")
 
-    # calculate total
     items_full = []
     subtotal = 0.0
+    
     for it in data.items:
         p = await db.products.find_one({"id": it.product_id})
-        if not p:
-            raise HTTPException(400, f"Invalid product {it.product_id}")
+        if not p: raise HTTPException(400, f"Invalid product {it.product_id}")
+        
+        # 1. Start with the catalog base parameters as default values
+        target_price = p["price"]
+        target_mrp = p["mrp"]
+        target_unit = p["unit"]
+        
+        # 2. 👇 CRITICAL UPDATE: If a variant unit name is provided, search the product's internal nested variants list
+        if it.unit and "variants" in p and p["variants"]:
+            # Find the specific variant dictionary option where the unit matches (e.g., '1kg', '500g')
+            match = next((v for v in p["variants"] if v.get("unit") == it.unit), None)
+            if match:
+                target_price = match.get("price", target_price)
+                target_mrp = match.get("mrp", target_mrp)
+                target_unit = match.get("unit", target_unit)
+        
+        # 3. Double-check backup fallback option if payload contains explicit pricing parameters
+        if it.price is not None and it.price > 0 and not match:
+            target_price = it.price
+            target_mrp = it.mrp if it.mrp is not None else target_mrp
+
         line = {
             "product_id": p["id"],
             "name": p["name"],
             "image": p["image"],
-            "price": p["price"],
-            "mrp": p["mrp"],
-            "unit": p["unit"],
-            "qty": it.qty,
-            "total": p["price"] * it.qty,
+            "price": float(target_price),
+            "mrp": float(target_mrp),
+            "unit": str(target_unit),
+            "qty": int(it.qty),
+            "total": float(target_price * it.qty),
         }
         subtotal += line["total"]
         items_full.append(line)
 
     delivery_fee = 0 if subtotal >= 499 else 40
-
-    # Coupon
-    discount = 0.0
-    coupon_doc = None
-    try:
-        discount, coupon_doc = await resolve_coupon(data.coupon_code, subtotal)
-    except HTTPException as e:
-        raise e
-
-    total = subtotal + delivery_fee - discount
-    if total < 0:
-        total = 0
+    discount, coupon_doc = await resolve_coupon(data.coupon_code, subtotal)
+    total = max(0, subtotal + delivery_fee - discount)
 
     order = {
         "id": str(uuid.uuid4()),
@@ -950,7 +913,7 @@ async def create_order(data: CheckoutIn, current=Depends(get_current_user)):
         "delivery_fee": delivery_fee,
         "discount": round(discount, 2),
         "coupon_code": coupon_doc["code"] if coupon_doc else None,
-        "total": round(total, 2),
+        "total": round(total, 2), # 👈 This is the absolute field Razorpay reads!
         "address": data.address.dict(),
         "note": (data.note or "").strip()[:500],
         "payment_method": data.payment_method,
@@ -961,15 +924,6 @@ async def create_order(data: CheckoutIn, current=Depends(get_current_user)):
         "distance_km": round(dist, 2),
     }
     await db.orders.insert_one(order)
-    try:
-        await push_to_user(
-            current["user_id"],
-            f"Rams Boutique • Order confirmed",
-            f"Order {order['order_no']} placed. Total ₹{int(order['total'])}. We'll notify you as it moves.",
-            url="/orders",
-        )
-    except Exception as e:
-        logging.warning(f"push on order create failed: {e}")
     return clean(order)
 
 
@@ -998,12 +952,9 @@ async def admin_stats(_=Depends(get_current_admin)):
     total_products = await db.products.count_documents({})
     total_users = await db.users.count_documents({"role": "user"})
     total_agents = await db.agents.count_documents({})
-
-    # revenue
     pipeline = [{"$match": {"status": {"$ne": "cancelled"}}}, {"$group": {"_id": None, "sum": {"$sum": "$total"}}}]
     agg = await db.orders.aggregate(pipeline).to_list(1)
     revenue = agg[0]["sum"] if agg else 0
-
     return {
         "total_orders": total_orders,
         "pending_orders": placed,
@@ -1033,7 +984,6 @@ async def admin_update_order(oid: str, data: OrderStatusUpdate, _=Depends(get_cu
     if res.matched_count == 0:
         raise HTTPException(404, "Order not found")
     doc = await db.orders.find_one({"id": oid})
-    # Fire push notification to customer
     try:
         status_msg = {
             "placed": "Your order has been placed.",
@@ -1113,48 +1063,38 @@ async def admin_users(_=Depends(get_current_admin)):
 from auth_utils import get_current_user
 
 
-# Get logged-in agent profile
 @api.get("/agent/me")
 async def agent_me(current=Depends(get_current_user)):
     if current["role"] != "agent":
         raise HTTPException(403, "Agent access required")
-
     agent = await db.agents.find_one({"id": current["user_id"]})
     if not agent:
         raise HTTPException(404, "Agent not found")
-
     return clean(agent)
 
 
-# Update agent profile
 @api.patch("/agent/me")
 async def update_agent_me(data: AgentIn, current=Depends(get_current_user)):
     if current["role"] != "agent":
         raise HTTPException(403, "Agent access required")
-
     await db.agents.update_one(
         {"id": current["user_id"]},
         {"$set": data.dict()}
     )
-
     agent = await db.agents.find_one({"id": current["user_id"]})
     return clean(agent)
 
 
-# Orders assigned to the logged-in agent
 @api.get("/agent/orders")
 async def agent_orders(current=Depends(get_current_user)):
     if current["role"] != "agent":
         raise HTTPException(403, "Agent access required")
-
     docs = await db.orders.find({
         "agent_id": current["user_id"]
     }).sort("created_at", -1).to_list(200)
-
     return [clean(d) for d in docs]
 
 
-# Agent can update only his assigned orders
 @api.patch("/agent/orders/{oid}")
 async def agent_update_order(
     oid: str,
@@ -1163,30 +1103,23 @@ async def agent_update_order(
 ):
     if current["role"] != "agent":
         raise HTTPException(403, "Agent access required")
-
     order = await db.orders.find_one({
         "id": oid,
         "agent_id": current["user_id"]
     })
-
     if not order:
         raise HTTPException(404, "Assigned order not found")
-
     allowed_status = ["packed", "out_for_delivery", "delivered"]
-
     if data.status not in allowed_status:
         raise HTTPException(400, "Invalid status for agent")
-
     await db.orders.update_one(
         {"id": oid},
         {"$set": {"status": data.status}}
     )
-
     updated = await db.orders.find_one({"id": oid})
     return clean(updated)
 
 
-# ============ NEW INVOICE ROUTE ENDPOINT ============
 @api.get("/orders/{order_id}")
 async def get_order_by_id(order_id: str):
     order = await db.orders.find_one({"$or": [{"id": order_id}, {"order_no": order_id}]})
@@ -1195,12 +1128,10 @@ async def get_order_by_id(order_id: str):
     return clean(order)
 
 
-# ============ HEALTH ============
 @api.get("/")
 async def root():
     return {"message": "Rams Boutique Vizag API", "store": "Dwaraka Nagar", "radius_km": DELIVERY_RADIUS_KM}
 
-# Include routers AFTER all routes are defined
 app.include_router(api)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
