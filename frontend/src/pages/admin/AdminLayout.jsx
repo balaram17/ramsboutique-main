@@ -1,7 +1,7 @@
 import React from 'react';
 import { NavLink, Outlet, Navigate, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { LayoutDashboard, Package, ShoppingBag, Users, Truck, LogOut, Store, FileText, Tag, Ticket } from 'lucide-react';
+import { LayoutDashboard, Package, ShoppingBag, Users, Truck, LogOut, FileText, Tag, Ticket, PiggyBank } from 'lucide-react';
 
 const AdminLayout = () => {
   const { user, loading, logout } = useAuth();
@@ -15,6 +15,7 @@ const AdminLayout = () => {
     { to: '/admin/products', icon: Package, label: 'Products' },
     { to: '/admin/categories', icon: Tag, label: 'Categories' },
     { to: '/admin/coupons', icon: Ticket, label: 'Coupons' },
+    { to: '/admin/chits', icon: PiggyBank, label: 'Grocery Chits' },
     { to: '/admin/agents', icon: Truck, label: 'Delivery Agents' },
     { to: '/admin/users', icon: Users, label: 'Users' },
     { to: '/admin/content', icon: FileText, label: 'Site Content' },

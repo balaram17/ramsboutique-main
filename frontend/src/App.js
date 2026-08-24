@@ -40,6 +40,10 @@ import ReturnsRefunds from "./pages/ReturnsRefunds";
 import ContactUs from "./pages/ContactUs";
 import TrackOrder from "./pages/TrackOrder";
 import FAQ from "./pages/FAQ";
+import Schemes from './pages/Schemes';
+import SchemeJoin from './pages/SchemeJoin';
+import MyChit from './pages/MyChit';
+import AdminChits from './pages/admin/AdminChits';
 
 const Shell = ({ children }) => {
   const loc = useLocation();
@@ -98,6 +102,9 @@ function App() {
                     <Route path="/contact" element={<ContactUs />} />
                     <Route path="/track-order" element={<TrackOrder />} />
                     <Route path="/faq" element={<FAQ />} />
+                    <Route path="/schemes" element={<Schemes />} />
+                    <Route path="/schemes/join/:duration" element={<SchemeJoin />} />
+                    <Route path="/my-chit" element={<MyChit />} />
 
                     {/* Agent Routings */}
                     <Route path="/agent/dashboard" element={<AgentDashboard />} />
@@ -114,6 +121,7 @@ function App() {
                       <Route path="categories" element={<AdminCategories />} />
                       <Route path="coupons" element={<AdminCoupons />} />
                       <Route path="content" element={<AdminContent />} />
+                      <Route path="chits" element={<AdminChits />} />
                     </Route>
 
                     {/* Global Wildcard Fallback: Redirects broken paths back to homepage */}

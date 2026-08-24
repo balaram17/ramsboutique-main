@@ -66,11 +66,13 @@ const Invoice = () => {
   // Grand total reflects the absolute payment amount stored directly in the database order history payload
   const grandTotal = order.total || 0;
   
-  // FIX: Declared strictly as a fallback constant value to avoid scope reference leaks
-  const fixedDeliveryCharge = 40;
+  // Use the fee snapshotted on this order so historical invoices never change.
+  const fixedDeliveryCharge = Number(order.delivery_fee || 0);
   
   // Products subtotal calculation boundary 
-  const itemsSubtotal = grandTotal - fixedDeliveryCharge;
+  const itemsSubtotal = Number.isFinite(Number(order.subtotal))
+    ? Number(order.subtotal)
+    : grandTotal - fixedDeliveryCharge;
 
   // INCLUSIVE TAX FORMULAS: Extracts the 5% tax parameters out of the existing base price framework lines
   // Taxable Value = Items Subtotal / 1.05

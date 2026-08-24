@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../lib/api';
 import { openRazorpayCheckout } from '../lib/razorpay';
-import { Package, RefreshCcw, Loader2, CheckCircle2, XCircle, Clock, FileText } from 'lucide-react';
+import { Package, RefreshCcw, Loader2, CheckCircle2, XCircle, Clock, FileText, Trash2 } from 'lucide-react';
 import { inr } from '../lib/utils';
 import { Button } from '../components/ui/button';
 import { useAuth } from '../context/AuthContext';
@@ -27,6 +27,7 @@ const Orders = () => {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [payingId, setPayingId] = useState(null);
+  const [cancellingId, setCancellingId] = useState(null);
   const { user } = useAuth();
   const { toast } = useToast();
 
@@ -49,6 +50,18 @@ const Orders = () => {
     } finally { setPayingId(null); }
   };
 
+  const cancelOrder = async (order) => {
+    if (!window.confirm(`Cancel unpaid order #${order.order_no}?`)) return;
+    setCancellingId(order.id);
+    try {
+      await api.post(`/orders/${order.id}/cancel`);
+      toast({ title: 'Order cancelled' });
+      load();
+    } catch (error) {
+      toast({ title: 'Could not cancel order', description: error.response?.data?.detail || 'Refresh and try again', variant: 'destructive' });
+    } finally { setCancellingId(null); }
+  };
+
   if (loading) return <div className="max-w-4xl mx-auto px-4 py-16 text-center text-gray-500">Loading...</div>;
 
   return (
@@ -66,6 +79,7 @@ const Orders = () => {
             const ps = PAY_STATUS_STYLE[o.payment_status] || PAY_STATUS_STYLE.pending;
             const canRetry = (o.payment_method === 'UPI' || o.payment_method === 'CARD') && ['pending', 'cancelled', 'failed'].includes(o.payment_status) && o.status !== 'cancelled';
             const isPaid = o.payment_status === 'paid';
+            const canCancel = o.payment_status !== 'paid' && o.status === 'placed';
 
             return (
               <div key={o.id} className="bg-white border rounded-lg p-4">
@@ -94,7 +108,7 @@ const Orders = () => {
                   <div className="ml-auto font-bold">{inr(o.total)}</div>
                 </div>
 
-                {(canRetry || isPaid) && (
+                {(canRetry || isPaid || canCancel) && (
                   <div className="mt-4 pt-3 border-t border-gray-100 flex justify-end items-center gap-2">
                     
                     {isPaid && (
@@ -111,6 +125,13 @@ const Orders = () => {
                       <Button size="sm" onClick={() => retry(o)} disabled={payingId === o.id} className="bg-[#f7941d] hover:bg-[#e58500] gap-2">
                         {payingId === o.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCcw className="w-3.5 h-3.5" />}
                         Pay Now
+                      </Button>
+                    )}
+
+                    {canCancel && (
+                      <Button size="sm" variant="outline" onClick={() => cancelOrder(o)} disabled={cancellingId === o.id} className="text-red-700 border-red-200 hover:bg-red-50 gap-2">
+                        {cancellingId === o.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                        Cancel Order
                       </Button>
                     )}
 

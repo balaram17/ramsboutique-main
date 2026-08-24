@@ -80,6 +80,15 @@ const Footer = () => {
 
             <li>
               <Link
+                to="/schemes"
+                className="text-[#f6b650] hover:text-white transition-colors font-semibold"
+              >
+                Grocery Chit Scheme
+              </Link>
+            </li>
+
+            <li>
+              <Link
                 to="/c/grocery"
                 className="hover:text-white transition-colors"
               >

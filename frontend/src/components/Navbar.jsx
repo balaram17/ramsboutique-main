@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ShoppingCart, Search, MapPin, User, LogOut, Package, ChevronDown, Menu, X } from 'lucide-react';
+import { ShoppingCart, Search, MapPin, User, LogOut, Package, ChevronDown, Menu, X, PiggyBank } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useCart } from '../context/CartContext';
 import { useLocationCtx } from '../context/LocationContext';
@@ -79,12 +79,15 @@ const Navbar = () => {
 
           {/* User + Cart */}
           <div className="flex items-center gap-2 ml-auto">
+            <Link to="/schemes" className="hidden lg:flex items-center gap-1.5 bg-[#fff4df] hover:bg-[#ffe7bd] text-[#8a470d] border border-[#f4c477] px-3 py-2 rounded-md font-semibold text-sm transition">
+              <PiggyBank className="w-4 h-4" /> Grocery Chit
+            </Link>
             {user ? (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="ghost" className="gap-2 hidden md:flex">
                     <User className="w-4 h-4" />
-                    <span className="text-sm font-medium">{user.name.split(' ')[0]}</span>
+                    <span className="text-sm font-medium">{(user.name || 'Customer').split(' ')[0]}</span>
                     <ChevronDown className="w-4 h-4" />
                   </Button>
                 </DropdownMenuTrigger>
@@ -96,6 +99,9 @@ const Navbar = () => {
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => nav('/profile')}>
                     <User className="w-4 h-4 mr-2" /> Profile
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => nav('/my-chit')}>
+                    <PiggyBank className="w-4 h-4 mr-2" /> My Grocery Chit
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={() => { logout(); nav('/'); }}>
@@ -131,6 +137,9 @@ const Navbar = () => {
 
         {mobileMenu && (
           <div className="md:hidden border-t bg-white px-4 py-3 space-y-2">
+            <Link to="/schemes" onClick={() => setMobileMenu(false)} className="flex items-center gap-2 w-full py-2 text-sm font-semibold text-[#8a470d]">
+              <PiggyBank className="w-4 h-4" /> Grocery Chit Saving Scheme
+            </Link>
             <button onClick={() => { setLocOpen(true); setMobileMenu(false); }} className="flex items-center gap-2 w-full text-left py-2 text-sm">
               <MapPin className="w-4 h-4 text-[#6b3410]" />
               {location?.deliverable ? `Vizag (${location.distance_km} km)` : 'Set delivery location'}
@@ -139,6 +148,7 @@ const Navbar = () => {
               <>
                 <Link to="/orders" className="block py-2 text-sm">My Orders</Link>
                 <Link to="/profile" className="block py-2 text-sm">Profile</Link>
+                <Link to="/my-chit" onClick={() => setMobileMenu(false)} className="block py-2 text-sm">My Grocery Chit</Link>
                 <button onClick={() => { logout(); nav('/'); }} className="block py-2 text-sm text-red-600">Logout</button>
               </>
             ) : (

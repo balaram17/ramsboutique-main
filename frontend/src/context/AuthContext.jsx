@@ -63,9 +63,15 @@ const verifyOtp = useCallback(async (phone, otp) => {
     setUser(null);
   }, []);
 
+  const updateProfile = useCallback(async (payload) => {
+    const { data } = await api.patch('/auth/me', payload);
+    setUser(data);
+    return data;
+  }, []);
+
   const value = useMemo(
-    () => ({ user, loading, login, adminLogin, signup, verifyOtp, logout }),
-    [user, loading, login, adminLogin, signup, verifyOtp, logout],
+    () => ({ user, loading, login, adminLogin, signup, verifyOtp, updateProfile, logout }),
+    [user, loading, login, adminLogin, signup, verifyOtp, updateProfile, logout],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

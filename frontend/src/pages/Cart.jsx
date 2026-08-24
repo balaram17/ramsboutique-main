@@ -19,6 +19,13 @@ const Cart = () => {
     try { return JSON.parse(localStorage.getItem(COUPON_KEY) || 'null'); } catch { return null; }
   });
   const [busy, setBusy] = useState(false);
+  const [deliveryCharge, setDeliveryCharge] = useState(40);
+
+  React.useEffect(() => {
+    api.get('/chits/settings').then(({ data }) => {
+      if (Number.isFinite(Number(data.delivery_charge_rupees))) setDeliveryCharge(Number(data.delivery_charge_rupees));
+    }).catch(() => {});
+  }, []);
 
   React.useEffect(() => {
     if (applied) localStorage.setItem(COUPON_KEY, JSON.stringify(applied));
@@ -52,7 +59,7 @@ const Cart = () => {
   const removeCoupon = () => { setApplied(null); toast({ title: 'Coupon removed' }); };
 
   const discount = applied?.discount || 0;
-  const delivery = subtotal >= 499 || subtotal === 0 ? 0 : 40;
+  const delivery = subtotal >= 499 || subtotal === 0 ? 0 : deliveryCharge;
   const total = Math.max(0, subtotal + delivery - discount);
 
   if (items.length === 0) {

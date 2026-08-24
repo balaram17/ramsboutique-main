@@ -21,7 +21,8 @@ const Checkout = () => {
   const { user } = useAuth();
   const { location } = useLocationCtx();
   const store = useStoreStatus();
-  const delivery = subtotal >= 499 ? 0 : 40;
+  const [deliveryCharge, setDeliveryCharge] = useState(40);
+  const delivery = subtotal >= 499 ? 0 : deliveryCharge;
   const total = subtotal + delivery;
   const [payment, setPayment] = useState('COD');
   const [placing, setPlacing] = useState(false);
@@ -40,6 +41,12 @@ const Checkout = () => {
     if (!user) { nav('/login?next=/checkout'); return; }
     if (items.length === 0) nav('/cart');
   }, [user, items.length, nav]);
+
+  React.useEffect(() => {
+    api.get('/chits/settings').then(({ data }) => {
+      if (Number.isFinite(Number(data.delivery_charge_rupees))) setDeliveryCharge(Number(data.delivery_charge_rupees));
+    }).catch(() => {});
+  }, []);
 
   const setF = (k, v) => setAddr((p) => ({ ...p, [k]: v }));
 

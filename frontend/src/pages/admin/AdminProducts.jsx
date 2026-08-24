@@ -7,7 +7,7 @@ import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { Textarea } from '../../components/ui/textarea';
 import { useToast } from '../../hooks/use-toast';
-import { Plus, Pencil, Trash2, Percent, TrendingUp, TrendingDown } from 'lucide-react';
+import { Plus, Pencil, Trash2, Percent, TrendingUp, TrendingDown, RefreshCw } from 'lucide-react';
 
 const empty = { 
   name: '', 
@@ -20,7 +20,7 @@ const empty = {
   image: '', 
   desc: '', 
   stock: 100,
-  variants: [] 
+  variants: [], source_url: '', auto_update_price: false, auto_update_mrp: false, auto_update_image: true
 };
 
 const emptyVariant = { unit: '', price: '', mrp: '', stock: '' };
@@ -37,6 +37,21 @@ const AdminProducts = () => {
 
   const [percentage, setPercentage] = useState('');
   const [globalBusy, setGlobalBusy] = useState(false);
+  const [syncBusy, setSyncBusy] = useState(false);
+
+  const refreshReferences = async () => {
+    setSyncBusy(true);
+    try {
+      const preview = await api.post('/admin/catalog/refresh', { apply: false });
+      const errors = preview.data.checked - preview.data.ready;
+      if (!preview.data.checked) return toast({ title: 'No source links configured', description: 'Edit products and add their official/reference product-page links first.' });
+      if (!confirm(`Checked ${preview.data.checked} products: ${preview.data.ready} ready, ${errors} errors. Apply the valid image/reference-price changes now?`)) return;
+      const applied = await api.post('/admin/catalog/refresh', { apply: true });
+      toast({ title: 'Catalogue refreshed', description: `${applied.data.ready} products updated from their configured sources.` });
+      load();
+    } catch (e) { toast({ title: 'Refresh failed', description: e.response?.data?.detail || e.message, variant: 'destructive' }); }
+    finally { setSyncBusy(false); }
+  };
 
   const load = useCallback(() => api.get('/products?limit=500').then((r) => setList(r.data)), []);
   useEffect(() => { load(); api.get('/categories').then((r) => setCats(r.data)); }, [load]);
@@ -148,9 +163,9 @@ const AdminProducts = () => {
     <div className="p-6 max-w-6xl mx-auto space-y-6">
       <div className="flex justify-between items-center">
         <h1 className="text-2xl font-bold tracking-tight">Manage Products</h1>
-        <Button onClick={openNew} className="gap-2 bg-emerald-600 hover:bg-emerald-700 text-white">
+        <div className="flex gap-2"><Button variant="outline" onClick={refreshReferences} disabled={syncBusy} className="gap-2"><RefreshCw className={`h-4 w-4 ${syncBusy?'animate-spin':''}`} /> Refresh Images & Vizag Prices</Button><Button onClick={openNew} className="gap-2 bg-emerald-600 hover:bg-emerald-700 text-white">
           <Plus className="h-4 w-4" /> Add Product
-        </Button>
+        </Button></div>
       </div>
 
       <div className="bg-slate-50 border rounded-xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -294,6 +309,11 @@ const AdminProducts = () => {
             <div className="space-y-2">
               <Label>Base MRP (₹)</Label>
               <Input type="number" value={f.mrp} onChange={(e) => setF({ ...f, mrp: e.target.value })} />
+            </div>
+            <div className="space-y-2 col-span-2">
+              <Label>Official / Reference Product Page URL</Label>
+              <Input type="url" placeholder="https://..." value={f.source_url || ''} onChange={(e) => setF({ ...f, source_url: e.target.value })} />
+              <div className="flex flex-wrap gap-4 text-sm"><label><input type="checkbox" checked={!!f.auto_update_image} onChange={e=>setF({...f,auto_update_image:e.target.checked})}/> Update image</label><label><input type="checkbox" checked={!!f.auto_update_price} onChange={e=>setF({...f,auto_update_price:e.target.checked})}/> Update selling price (market items only)</label><label><input type="checkbox" checked={!!f.auto_update_mrp} onChange={e=>setF({...f,auto_update_mrp:e.target.checked})}/> Update printed MRP</label></div>
             </div>
             <div className="space-y-2 col-span-2">
               <Label>Base Stock</Label>

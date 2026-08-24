@@ -24,6 +24,8 @@ import razorpay
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
+from chits import router as chits_router, seed_chit_data, start_chit_scheduler, stop_chit_scheduler
+from catalog_sync import inspect_source, proposed_update
 
 mongo_url = os.environ["MONGO_URL"]
 client = AsyncIOMotorClient(mongo_url)
@@ -78,6 +80,11 @@ class LoginAgentIn(BaseModel):
 class LoginIn(BaseModel):
     email: EmailStr
     password: str
+
+class ProfileUpdateIn(BaseModel):
+    name: str = Field(..., min_length=2, max_length=100)
+    email: EmailStr
+    phone: str = Field(..., pattern=r"^\d{10}$")
 
 class OtpPhoneIn(BaseModel):
     phone: str = Field(..., pattern=r"^\d{10}$")
@@ -143,6 +150,13 @@ class ProductIn(BaseModel):
     desc: str
     stock: int = 100
     variants: Optional[List[VariantItem]] = []
+    source_url: Optional[str] = ""
+    auto_update_price: bool = False
+    auto_update_mrp: bool = False
+    auto_update_image: bool = True
+
+class CatalogRefreshIn(BaseModel):
+    apply: bool = False
 
 
 class AgentIn(BaseModel):
@@ -559,6 +573,22 @@ async def me(current=Depends(get_current_user)):
     return {"id": user["id"], "name": user["name"], "email": user["email"], "phone": user["phone"], "role": user["role"]}
 
 
+@api.patch("/auth/me")
+async def update_my_profile(data: ProfileUpdateIn, current=Depends(get_current_user)):
+    user = await db.users.find_one({"id": current["user_id"]})
+    if not user: raise HTTPException(404, "User not found")
+    email = str(data.email).strip().lower()
+    phone = data.phone.strip()
+    duplicate = await db.users.find_one({"id": {"$ne": current["user_id"]}, "$or": [{"email": email}, {"phone": phone}]})
+    if duplicate:
+        if duplicate.get("email") == email: raise HTTPException(409, "Email address is already registered")
+        raise HTTPException(409, "Mobile number is already registered")
+    await db.users.update_one({"id": current["user_id"]}, {"$set": {
+        "name": data.name.strip(), "email": email, "phone": phone, "updated_at": now_iso()}})
+    updated = await db.users.find_one({"id": current["user_id"]})
+    return {"id": updated["id"], "name": updated["name"], "email": updated["email"], "phone": updated["phone"], "role": updated["role"]}
+
+
 # ============ LOCATION ============
 @api.post("/location/check")
 async def check_location(data: LocationCheckIn):
@@ -900,7 +930,9 @@ async def create_order(data: CheckoutIn, current=Depends(get_current_user)):
         subtotal += line["total"]
         items_full.append(line)
 
-    delivery_fee = 0 if subtotal >= 499 else 40
+    settings = await db.chit_settings.find_one({"id": "chit_settings"})
+    configured_delivery_fee = int((settings or {}).get("delivery_charge_paise", 4_000)) / 100
+    delivery_fee = 0 if subtotal >= 499 else configured_delivery_fee
     discount, coupon_doc = await resolve_coupon(data.coupon_code, subtotal)
     total = max(0, subtotal + delivery_fee - discount)
 
@@ -941,6 +973,21 @@ async def get_order(oid: str, current=Depends(get_current_user)):
     if current["role"] != "admin" and doc["user_id"] != current["user_id"]:
         raise HTTPException(403, "Forbidden")
     return clean(doc)
+
+
+@api.post("/orders/{oid}/cancel")
+async def cancel_my_unpaid_order(oid: str, current=Depends(get_current_user)):
+    order = await db.orders.find_one({"id": oid, "user_id": current["user_id"]})
+    if not order: raise HTTPException(404, "Order not found")
+    if order.get("payment_status") == "paid":
+        raise HTTPException(409, "Paid orders cannot be self-cancelled. Please contact customer support.")
+    if order.get("status") != "placed":
+        raise HTTPException(409, f"Order cannot be cancelled after it is {order.get('status', 'processed')}")
+    result = await db.orders.delete_one(
+        {"id": oid, "user_id": current["user_id"], "status": "placed", "payment_status": {"$ne": "paid"}},
+    )
+    if not result.deleted_count: raise HTTPException(409, "Order status changed; refresh and try again")
+    return {"ok": True, "deleted": True, "order_id": oid}
 
 
 # ============ ADMIN ============
@@ -1023,6 +1070,18 @@ async def admin_update_product(pid: str, p: ProductIn, _=Depends(get_current_adm
 async def admin_delete_product(pid: str, _=Depends(get_current_admin)):
     await db.products.delete_one({"id": pid})
     return {"ok": True}
+
+@api.post("/admin/catalog/refresh")
+async def admin_refresh_catalog(payload: CatalogRefreshIn, _=Depends(get_current_admin)):
+    docs=await db.products.find({"source_url":{"$nin":[None,""]}}).to_list(1000); results=[]
+    for p in docs:
+        try:
+            checked=await inspect_source(p["source_url"]); changes=proposed_update(p,checked)
+            if payload.apply:
+                await db.products.update_one({"id":p["id"]},{"$set":changes,"$push":{"price_history":{"at":checked["checked_at"],"old_price":p.get("price"),"old_mrp":p.get("mrp"),"new_price":changes.get("price"),"new_mrp":changes.get("mrp"),"source_url":p["source_url"]}}})
+            results.append({"id":p["id"],"name":p["name"],"status":"ready","changes":changes})
+        except Exception as e: results.append({"id":p["id"],"name":p["name"],"status":"error","error":str(e)[:300]})
+    return {"applied":payload.apply,"checked":len(results),"ready":sum(x["status"]=="ready" for x in results),"results":results}
 
 
 @api.get("/admin/agents")
@@ -1133,6 +1192,7 @@ async def root():
     return {"message": "Rams Boutique Vizag API", "store": "Dwaraka Nagar", "radius_km": DELIVERY_RADIUS_KM}
 
 app.include_router(api)
+app.include_router(chits_router)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -1141,8 +1201,11 @@ logger = logging.getLogger(__name__)
 @app.on_event("startup")
 async def startup():
     await seed_db()
+    await seed_chit_data()
+    start_chit_scheduler()
 
 
 @app.on_event("shutdown")
 async def shutdown():
+    stop_chit_scheduler()
     client.close()
