@@ -4,30 +4,31 @@ import { Check, ChevronDown, ChevronUp, Package } from 'lucide-react';
 import api from '../lib/api';
 import './Schemes.css';
 
-const plans = [
-  { duration: 1, title: 'Trial', te: '1 నెల', total: 500 },
-  { duration: 3, title: 'Quarterly', te: '3 నెలలు', total: 1500 },
-  { duration: 6, title: 'Half Yearly', te: '6 నెలలు', total: 3000 },
-  { duration: 12, title: 'Yearly / Full Kit', te: '12 నెలలు', total: 6000, popular: true },
-];
+const teluguMonths = { 1: '1 నెల', 3: '3 నెలలు', 6: '6 నెలలు', 12: '12 నెలలు' };
+const inr = value => Number(value || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
 
 export default function Schemes() {
   const [duration, setDuration] = useState(12);
+  const [plans, setPlans] = useState([]);
   const [kit, setKit] = useState([]);
   const [open, setOpen] = useState(false);
+  useEffect(() => { api.get('/chits/plans').then(r => setPlans(r.data)); }, []);
   useEffect(() => { api.post('/chits/calculate-kit', { duration }).then(r => setKit(r.data.items)); }, [duration]);
+  const selectedPlan = plans.find(p => p.duration === duration);
+  const monthlyRupees = (selectedPlan?.monthly_amount_paise || 0) / 100;
+  const totalRupees = (selectedPlan?.total_paise || 0) / 100;
   return <div className="scheme-page">
     <section className="scheme-hero">
       <span className="scheme-pill">Rams Boutique Grocery Savings</span>
-      <h1>Save ₹500 monthly. Receive your complete grocery kit once.</h1>
-      <p>నెలకు ₹500 చెల్లించండి • చివరి వాయిదా తర్వాత కిరాణా కిట్ పొందండి</p>
+      <h1>Save monthly. Receive your complete grocery kit once.</h1>
+      <p>మీ ప్లాన్ మొత్తాన్ని నెలవారీగా చెల్లించండి • చివరి వాయిదా తర్వాత కిరాణా కిట్ పొందండి</p>
     </section>
     <section className="scheme-wrap">
       <div className="plan-grid">{plans.map(p => <button key={p.duration} onClick={() => setDuration(p.duration)} className={`plan-card ${duration === p.duration ? 'selected' : ''}`}>
-        {p.popular && <span className="popular">BEST VALUE</span>}
+        {p.duration === 12 && <span className="popular">BEST VALUE</span>}
         <span className="months">{p.duration}</span><span>MONTH{p.duration > 1 ? 'S' : ''}</span>
-        <h2>{p.title}</h2><small>{p.te}</small>
-        <strong>₹500 <em>/ month</em></strong><p>Total ₹{p.total.toLocaleString('en-IN')}</p>
+        <h2>{p.title}</h2><small>{teluguMonths[p.duration]}</small>
+        <strong>₹{inr(p.monthly_amount_paise / 100)} <em>/ month</em></strong><p>Total ₹{inr(p.total_paise / 100)}</p>
         <span className="select-line">{duration === p.duration && <Check size={16}/>} Select plan</span>
       </button>)}</div>
       <div className="kit-preview">
@@ -36,7 +37,7 @@ export default function Schemes() {
         {open && <div className="kit-table"><div className="kit-row kit-head"><span>Item</span><span>Full kit</span><span>Your quantity</span></div>
           {kit.map(i => <div className="kit-row" key={i.id}><span>{i.name}<small>{i.name_te}</small></span><span>{i.full_qty} {i.unit}</span><b>{i.final_qty} {i.unit}</b></div>)}</div>}
       </div>
-      <Link className="join-cta" to={`/schemes/join/${duration}`}>Join {duration}-Month Plan • Pay ₹500</Link>
+      {selectedPlan && <Link className="join-cta" to={`/schemes/join/${duration}`}>Join {duration}-Month Plan • ₹{inr(monthlyRupees)} / month • Total ₹{inr(totalRupees)}</Link>}
       <p className="fine-print">All items are delivered together only after every instalment is successfully paid. ₹50 packing charge applies at slot booking.</p>
     </section>
   </div>;

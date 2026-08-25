@@ -129,6 +129,9 @@ class ChitSettingsIn(BaseModel):
     packing_charge_rupees: float = Field(ge=1, le=10_000)
     delivery_charge_rupees: float = Field(ge=0, le=10_000)
 
+class ChitPlanPriceIn(BaseModel):
+    monthly_amount_rupees: float = Field(ge=1, le=100_000)
+
 class SlotIn(BaseModel):
     subscription_id: str
     delivery_date: str
@@ -215,6 +218,18 @@ async def delivery_charge_paise():
     return int((settings or {}).get("delivery_charge_paise", 4_000))
 
 
+async def active_plan(duration: int):
+    plan = await db.chit_plans.find_one({"duration": duration, "active": True})
+    if not plan:
+        raise HTTPException(404, "Chit plan is not available")
+    return plan
+
+
+def subscription_amount_paise(sub):
+    """Use the price accepted when the customer subscribed; preserve legacy records."""
+    return int(sub.get("monthly_amount_paise", MONTHLY_PAISE))
+
+
 @router.get("/plans")
 async def plans():
     docs = await db.chit_plans.find({"active": True}).sort("duration", 1).to_list(10)
@@ -230,7 +245,11 @@ async def public_settings():
 
 @router.post("/calculate-kit")
 async def calculate(payload: CalculateIn):
-    return {"duration": payload.duration, "monthly_amount": 500, "total_payable": 500 * payload.duration,
+    plan = await active_plan(payload.duration)
+    monthly_paise = int(plan.get("monthly_amount_paise", MONTHLY_PAISE))
+    return {"duration": payload.duration, "monthly_amount": monthly_paise / 100,
+            "monthly_amount_paise": monthly_paise,
+            "total_payable": monthly_paise * payload.duration / 100,
             "formula": "full_qty / 12 × duration", "items": await kit_for(payload.duration)}
 
 
@@ -247,11 +266,14 @@ async def subscribe(payload: SubscribeIn, current=Depends(get_current_user)):
     if not user: raise HTTPException(404, "User not found")
     active = await db.chit_subscriptions.find_one({"user_id": current["user_id"], "status": {"$nin": ["cancelled", "denied", "denied_no_refund", "delivered"]}})
     if active: raise HTTPException(409, "You already have an active chit subscription")
+    plan = await active_plan(payload.duration)
+    monthly_paise = int(plan.get("monthly_amount_paise", MONTHLY_PAISE))
     sid, card = str(uuid.uuid4()), await new_card_no()
     doc = {"id": sid, "card_no": card, "user_id": current["user_id"], "name": payload.name,
            "phone": payload.phone, "address": payload.address, "city": payload.city,
-           "chosen_duration": payload.duration, "paid_count": 0, "monthly_amount_paise": MONTHLY_PAISE,
-           "total_paise": MONTHLY_PAISE * payload.duration, "next_due_date": None,
+           "chosen_duration": payload.duration, "plan_id": plan["id"], "paid_count": 0,
+           "monthly_amount_paise": monthly_paise,
+           "total_paise": monthly_paise * payload.duration, "next_due_date": None,
            "status": "pending_admin_approval", "approval_status": "pending",
            "payment_setup_status": "not_created", "terms_accepted_at": now(), "created_at": now()}
     await db.chit_subscriptions.insert_one(doc)
@@ -266,18 +288,19 @@ async def start_payment(payload: MockPaymentIn, current=Depends(get_current_user
         raise HTTPException(409, "Admin approval is required before payment")
     if sub.get("razorpay_order_id") or sub.get("razorpay_subscription_id"):
         raise HTTPException(409, "Payment setup already exists; refresh your chit card")
-    checkout = {"key": os.getenv("RAZORPAY_KEY_ID", ""), "amount": MONTHLY_PAISE, "currency": "INR"}
+    monthly_paise = subscription_amount_paise(sub)
+    checkout = {"key": os.getenv("RAZORPAY_KEY_ID", ""), "amount": monthly_paise, "currency": "INR"}
     gateway = {}
     if rzp:
         if sub["chosen_duration"] == 1:
-            entity = rzp.order.create({"amount": MONTHLY_PAISE, "currency": "INR", "receipt": sub["id"][:32], "notes": {"subscription_id": sub["id"]}})
+            entity = rzp.order.create({"amount": monthly_paise, "currency": "INR", "receipt": sub["id"][:32], "notes": {"subscription_id": sub["id"]}})
             checkout.update({"type": "order", "order_id": entity["id"]})
             gateway = {"razorpay_order_id": entity["id"]}
         else:
             plan = rzp.plan.create({"period": "monthly", "interval": 1, "item": {
                 "name": f"Rams Boutique {sub['chosen_duration']}-Month Grocery Chit",
-                "amount": MONTHLY_PAISE, "currency": "INR"}, "notes": {"duration": str(sub["chosen_duration"])}})
-            # Immediate start makes Checkout collect the first ₹500 term after approval.
+                "amount": monthly_paise, "currency": "INR"}, "notes": {"duration": str(sub["chosen_duration"])}})
+            # Immediate start makes Checkout collect the first configured term after approval.
             entity = rzp.subscription.create({"plan_id": plan["id"], "total_count": sub["chosen_duration"],
                                               "customer_notify": 1, "notes": {
                                                   "internal_subscription_id": sub["id"], "card_no": sub["card_no"]}})
@@ -329,8 +352,8 @@ async def verify_checkout(payload: CheckoutVerifyIn, current=Depends(get_current
         else: rzp.utility.verify_subscription_payment_signature(values)
     except Exception: raise HTTPException(400, "Invalid Razorpay signature")
     # Payment is created only after approval and starts immediately, so the
-    # Checkout payment is the first ₹500 term. Webhook retries are deduplicated.
-    await record_payment(sub, payload.razorpay_payment_id, MONTHLY_PAISE)
+    # Checkout payment is the first configured term. Webhook retries are deduplicated.
+    await record_payment(sub, payload.razorpay_payment_id, subscription_amount_paise(sub))
     if payload.razorpay_subscription_id:
         await db.chit_subscriptions.update_one({"id": sub["id"]}, {"$set": {
             "mandate_status": "authenticated", "updated_at": now()}})
@@ -346,7 +369,7 @@ async def mock_payment(payload: MockPaymentIn, current=Depends(get_current_user)
     if not sub: raise HTTPException(404, "Subscription not found")
     if sub.get("approval_status") != "approved" or sub.get("status") != "approved_awaiting_payment":
         raise HTTPException(409, "Admin approval is required before payment")
-    await record_payment(sub, f"mock_{uuid.uuid4().hex}", MONTHLY_PAISE)
+    await record_payment(sub, f"mock_{uuid.uuid4().hex}", subscription_amount_paise(sub))
     return {"ok": True}
 
 
@@ -361,7 +384,7 @@ async def webhook(request: Request, x_razorpay_signature: str = Header(default="
         entity = event["payload"]["subscription"]["entity"]
         payment = event["payload"]["payment"]["entity"]
         sub = await db.chit_subscriptions.find_one({"razorpay_subscription_id": entity["id"]})
-        if sub: await record_payment(sub, payment["id"], payment.get("amount", MONTHLY_PAISE), event_id=event.get("id"))
+        if sub: await record_payment(sub, payment["id"], payment.get("amount", subscription_amount_paise(sub)), event_id=event.get("id"))
     elif event_name in ("subscription.pending", "subscription.failed", "subscription.payment_failed", "subscription.halted", "subscription.cancelled"):
         entity = event["payload"]["subscription"]["entity"]
         sub = await db.chit_subscriptions.find_one({"razorpay_subscription_id": entity["id"]})
@@ -507,6 +530,47 @@ async def admin_update_settings(payload: ChitSettingsIn, admin=Depends(get_curre
     }}, upsert=True)
     return {"ok": True, "packing_charge_paise": charge_paise, "packing_charge_rupees": charge_paise / 100,
             "delivery_charge_paise": delivery_paise, "delivery_charge_rupees": delivery_paise / 100}
+
+
+@router.get("/admin/plans")
+async def admin_plans(_=Depends(get_current_admin)):
+    docs = await db.chit_plans.find({}).sort("duration", 1).to_list(10)
+    return [public(x) for x in docs]
+
+
+@router.put("/admin/plans/{duration}/price")
+async def admin_update_plan_price(
+    duration: int,
+    payload: ChitPlanPriceIn,
+    admin=Depends(get_current_admin),
+):
+    if duration not in ALLOWED_DURATIONS:
+        raise HTTPException(404, "Chit plan not found")
+    monthly_paise = int(
+        (Decimal(str(payload.monthly_amount_rupees)) * 100).quantize(
+            Decimal("1"), rounding=ROUND_HALF_UP
+        )
+    )
+    result = await db.chit_plans.update_one(
+        {"duration": duration},
+        {"$set": {
+            "monthly_amount_paise": monthly_paise,
+            "total_paise": monthly_paise * duration,
+            "updated_at": now(),
+            "updated_by": admin["user_id"],
+        }},
+    )
+    if not result.matched_count:
+        raise HTTPException(404, "Chit plan not found")
+    return {
+        "ok": True,
+        "duration": duration,
+        "monthly_amount_paise": monthly_paise,
+        "monthly_amount_rupees": monthly_paise / 100,
+        "total_paise": monthly_paise * duration,
+        "total_rupees": monthly_paise * duration / 100,
+        "message": "Plan price updated for new subscriptions only",
+    }
 
 @router.post("/admin/items")
 async def admin_add_item(item: ItemIn, _=Depends(get_current_admin)):
