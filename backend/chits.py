@@ -156,10 +156,22 @@ class ChitRefreshIn(BaseModel):
 
 
 async def seed_chit_data():
+    await db.chit_plans.create_index("id", unique=True)
+    await db.chit_plans.create_index("duration")
+
     await db.chit_plan_items.create_index("id", unique=True)
+    await db.chit_plan_items.create_index("sort_order")
+
     await db.chit_subscriptions.create_index("id", unique=True)
     await db.chit_subscriptions.create_index("card_no", unique=True)
-    await db.chit_payments.create_index("razorpay_payment_id", unique=True)
+    await db.chit_subscriptions.create_index([("created_at", -1)])
+
+    await db.chit_payments.create_index(
+        "razorpay_payment_id",
+        unique=True
+    )
+    await db.chit_payments.create_index("payment_no")
+
     await db.chit_settings.update_one({"id": "chit_settings"}, {"$setOnInsert": {
         "id": "chit_settings", "packing_charge_paise": DEFAULT_PACKING_PAISE,
         "delivery_charge_paise": 4_000, "created_at": now()
