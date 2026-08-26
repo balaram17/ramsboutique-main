@@ -14,7 +14,7 @@ const Category = ({ mode = 'category' }) => {
 
   useEffect(() => {
     setLoading(true);
-    const params = mode === 'search' ? { q } : { category: slug };
+    const params = mode === 'search' ? { q, limit: 500 } : { category: slug, limit: 500 };
     api.get('/products', { params }).then((r) => setProducts(r.data)).finally(() => setLoading(false));
     if (mode === 'category') api.get('/categories').then((r) => setCat(r.data.find((c) => c.slug === slug)));
   }, [slug, q, mode]);

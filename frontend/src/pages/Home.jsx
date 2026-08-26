@@ -14,7 +14,7 @@ const Home = () => {
 
   useEffect(() => {
     api.get('/banners').then((r) => setBanners(r.data));
-    api.get('/products?limit=100').then((r) => setProducts(r.data));
+    api.get('/products?limit=500').then((r) => setProducts(r.data));
     api.get('/categories').then((r) => setCats(r.data));
   }, []);
 

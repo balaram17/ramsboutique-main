@@ -5,6 +5,8 @@ from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
+import csv
+import hashlib
 import random
 import logging
 import math
@@ -395,6 +397,73 @@ async def seed_db():
             }
             await db.products.insert_one(doc)
         logging.info(f"Seeded {len(PRODUCTS)} products")
+
+    # Import the public Seethammadhara catalogue without overwriting products
+    # that an administrator has already edited.  source_key makes the import
+    # idempotent, including rows where the source site exposes no product UUID.
+    market_csv = ROOT_DIR / "seethammadhara_products.csv"
+    if market_csv.exists():
+        category_map = {
+            "groceries": ("grocery", "Grocery & Staples", "wheat"),
+            "fruits": ("fruits-vegetables", "Fruits & Vegetables", "apple"),
+            "vegetables": ("fruits-vegetables", "Fruits & Vegetables", "apple"),
+            "leafy green": ("fruits-vegetables", "Fruits & Vegetables", "apple"),
+            "flowers": ("flowers", "Flowers", "sparkles"),
+        }
+        imported = 0
+        with market_csv.open("r", encoding="utf-8-sig", newline="") as handle:
+            for row in csv.DictReader(handle):
+                source_category = (row.get("category") or "Groceries").strip()
+                category, category_name, category_icon = category_map.get(
+                    source_category.lower(), ("grocery", "Grocery & Staples", "wheat")
+                )
+                await db.categories.update_one(
+                    {"id": category},
+                    {"$setOnInsert": {
+                        "id": category, "slug": category, "name": category_name,
+                        "icon": category_icon, "order": 50,
+                    }},
+                    upsert=True,
+                )
+
+                raw_key = (row.get("product_id") or "").strip()
+                if not raw_key:
+                    raw_key = hashlib.sha256(
+                        ((row.get("source_url") or "") + "|" + (row.get("image_url") or "")).encode("utf-8")
+                    ).hexdigest()
+                price = max(float(row.get("price") or 0), 0)
+                mrp = max(float(row.get("mrp") or price), price)
+                doc = {
+                    "id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"seethammadhara:{raw_key}")),
+                    "source_key": raw_key,
+                    "source_product_id": (row.get("product_id") or "").strip(),
+                    "source_market": "seethammadhara",
+                    "name": (row.get("name") or "").strip(),
+                    "name_te": (row.get("name_telugu") or "").strip(),
+                    "name_hi": (row.get("name_hindi") or "").strip(),
+                    "brand": "Digi Rythu Bazaar",
+                    "category": category,
+                    "sub": source_category,
+                    "price": price,
+                    "mrp": mrp,
+                    "unit": (row.get("unit") or "piece").strip(),
+                    "image": (row.get("image_url") or "").strip(),
+                    "desc": (row.get("description") or "").strip(),
+                    "stock": 100,
+                    "variants": [],
+                    "source_url": (row.get("source_url") or "").strip(),
+                    "auto_update_price": True,
+                    "auto_update_mrp": True,
+                    "auto_update_image": True,
+                    "created_at": now_iso(),
+                }
+                await db.products.update_one(
+                    {"source_market": "seethammadhara", "source_key": raw_key},
+                    {"$setOnInsert": doc},
+                    upsert=True,
+                )
+                imported += 1
+        logging.info("Ensured %s Seethammadhara products are available", imported)
 
     if await db.banners.count_documents({}) == 0:
         for b in BANNERS:
@@ -863,7 +932,7 @@ async def update_site_content(data: SiteContentIn, _=Depends(get_current_admin))
 async def list_products(
     category: Optional[str] = None,
     q: Optional[str] = None,
-    limit: int = 100,
+    limit: int = Query(default=500, ge=1, le=1000),
 ):
     query: dict = {}
     if category:

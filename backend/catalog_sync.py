@@ -1,7 +1,7 @@
 """Safe schema.org based catalogue reference checks."""
-import json, re
+import html, json, re
 from datetime import datetime, timezone
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qs, unquote_plus, urljoin, urlparse
 import httpx
 
 def utcnow(): return datetime.now(timezone.utc)
@@ -20,9 +20,14 @@ def money(v):
     return round(n,2) if n and n < 1_000_000 else None
 async def inspect_source(url):
     if not safe_url(url): raise ValueError("Only public http/https source URLs are allowed")
-    async with httpx.AsyncClient(timeout=15,follow_redirects=True,headers={"User-Agent":"RamsBoutique-CatalogCheck/1.0"}) as c:
+    parsed=urlparse(url)
+    is_digi=(parsed.hostname or "").lower() in {"digirythubazaarap.com","www.digirythubazaarap.com"}
+    cookies={"NearestRbId":"b823b231-653f-4554-9aba-ae22f6725a20","NearestRbDistance":"0"} if is_digi else None
+    async with httpx.AsyncClient(timeout=15,follow_redirects=True,cookies=cookies,headers={"User-Agent":"RamsBoutique-CatalogCheck/1.0"}) as c:
         r=await c.get(url); r.raise_for_status()
         if len(r.content)>2_000_000: raise ValueError("Source page is too large")
+    if is_digi:
+        return inspect_digi_page(url,r.text)
     nodes=[]
     for raw in re.findall(r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',r.text,re.I|re.S):
         try: nodes.extend(walk(json.loads(raw.strip())))
@@ -37,6 +42,32 @@ async def inspect_source(url):
         m=re.search(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)',r.text,re.I); image=m.group(1) if m else None
     image=urljoin(url,str(image)) if image else None
     return {"price":price,"mrp":mrp,"image":image if safe_url(image) else None,"checked_at":utcnow()}
+
+def plain(value):
+    return html.unescape(re.sub(r"<[^>]+>","",value or "")).strip()
+
+def card_text(card,class_name):
+    match=re.search(r'class=["\'][^"\']*\b'+re.escape(class_name)+r'\b[^"\']*["\'][^>]*>(.*?)</',card,re.I|re.S)
+    return plain(match.group(1)) if match else ""
+
+def inspect_digi_page(url,body):
+    wanted=unquote_plus(parse_qs(urlparse(url).query).get("search",[""])[0]).strip().casefold()
+    cards=re.split(r'class=["\'][^"\']*\bmodern-product-card\b[^"\']*["\']',body,flags=re.I)[1:]
+    if not cards: raise ValueError("No Digi Rythu Bazaar products were returned for Seethammadhara")
+    selected=None
+    for card in cards:
+        if card_text(card,"product-name").casefold()==wanted:
+            selected=card; break
+    if selected is None: raise ValueError("The exact Digi Rythu Bazaar product was not found")
+    price=money(card_text(selected,"current-price"))
+    mrp=None
+    for cls in ("original-price","old-price","mrp-price","strikethrough-price"):
+        mrp=money(card_text(selected,cls))
+        if mrp is not None: break
+    image_match=re.search(r'<img[^>]+src=["\']([^"\']+)["\']',selected,re.I)
+    image=urljoin(url,html.unescape(image_match.group(1))) if image_match else None
+    if price is None: raise ValueError("Digi Rythu Bazaar price is unavailable")
+    return {"price":price,"mrp":max(mrp or price,price),"image":image if safe_url(image) else None,"checked_at":utcnow()}
 def proposed_update(doc,result):
     out={"source_checked_at":result["checked_at"],"source_status":"ok"}
     if result.get("price") is not None:
