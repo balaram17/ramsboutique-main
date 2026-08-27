@@ -33,6 +33,7 @@ import AdminAgents from './pages/admin/AdminAgents';
 import AdminUsers from './pages/admin/AdminUsers';
 import AdminContent from './pages/admin/AdminContent';
 import AdminCategories from './pages/admin/AdminCategories';
+import AdminDmart from './pages/admin/AdminDmart';
 import AdminCoupons from './pages/admin/AdminCoupons';
 
 import Terms from "./pages/Terms";
@@ -119,6 +120,7 @@ function App() {
                       <Route path="agents" element={<AdminAgents />} />
                       <Route path="users" element={<AdminUsers />} />
                       <Route path="categories" element={<AdminCategories />} />
+                      <Route path="dmart" element={<AdminDmart />} />
                       <Route path="coupons" element={<AdminCoupons />} />
                       <Route path="content" element={<AdminContent />} />
                       <Route path="chits" element={<AdminChits />} />
