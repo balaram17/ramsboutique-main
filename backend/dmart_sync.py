@@ -48,11 +48,12 @@ def rams_slug(token):
 
 
 def image_url(sku):
-    key = str(sku.get("imageKey") or sku.get("productImageKey") or "").strip("/")
+    key = str(sku.get("productImageKey") or "").strip("/")
+    code = str(sku.get("imgCode") or "").strip()
     if not key:
         return ""
-    # DMart image keys normally include the M/A/R-style directory prefix.
-    return f"{DMART_CDN}/images/products/{key}_5_P.jpg"
+    # DMart's product cards use productImageKey_imgCode_size.jpg (P = medium).
+    return f"{DMART_CDN}/images/products/{key}_{code}_P.jpg" if code else ""
 
 
 async def fetch_page(client, token, page, size=100):

@@ -1349,13 +1349,14 @@ It reads only the selected public catalogue categories and downloads a CSV. */
             if (!name || name.toLowerCase().startsWith("dmart")) continue;
             const mrp = Number(sku.priceMRP || 0);
             if (!(mrp > 0)) continue;
-            const key = String(sku.imageKey || sku.productImageKey || "").replace(/^\\/+|\\/+$/g, "");
+            const key = String(sku.productImageKey || "").replace(/^\\/+|\\/+$/g, "");
+            const imageCode = String(sku.imgCode || "").trim();
             rows.push({{
               category_token: token, category_l1: levels.L1 || "", category_l2: levels.L2 || "",
               category_l3: levels.L3 || "", product_id: product.productId || "",
               sku_id: sku.skuUniqueID || "", name, brand: product.manufacturer || "DMart",
               unit: sku.variantTextValue || "piece", mrp: mrp.toFixed(2),
-              image_url: key ? `https://cdn.dmart.in/images/products/${{key}}_5_P.jpg` : "",
+              image_url: key && imageCode ? `https://cdn.dmart.in/images/products/${{key}}_${{imageCode}}_P.jpg` : "",
               source_url: `https://www.dmart.in${{product.targetUrl || "/"}}`, active: "true"
             }});
           }}
