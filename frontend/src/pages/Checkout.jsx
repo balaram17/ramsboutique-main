@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useCart } from '../context/CartContext';
+import { formatQuantity, useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 import { useLocationCtx } from '../context/LocationContext';
 import { useStoreStatus } from '../hooks/use-store-status';
@@ -153,7 +153,7 @@ const Checkout = () => {
             <li key={product.id} className="flex justify-between border-b border-dashed pb-1.5 last:border-0">
               <span className="line-clamp-1 pr-2 flex flex-col">
                 <span className="font-medium text-gray-800">{product.name}</span>
-                <span className="text-[11px] text-gray-400">Option: {product.unit} × {qty}</span>
+                <span className="text-[11px] text-gray-400">Quantity: {formatQuantity(qty, product.unit)}</span>
               </span>
               <span className="font-mono text-gray-700">{inr(product.price * qty)}</span>
             </li>

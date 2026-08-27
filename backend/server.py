@@ -10,6 +10,7 @@ import hashlib
 import random
 import logging
 import math
+import re
 import uuid
 import httpx
 from pathlib import Path
@@ -113,7 +114,7 @@ class Address(BaseModel):
 
 class CartItem(BaseModel):
     product_id: str
-    qty: int
+    qty: float = Field(gt=0)
     unit: Optional[str] = None 
     price: Optional[float] = None
     mrp: Optional[float] = None
@@ -971,6 +972,7 @@ async def create_order(data: CheckoutIn, current=Depends(get_current_user)):
         target_price = p["price"]
         target_mrp = p["mrp"]
         target_unit = p["unit"]
+        match = None
         
         # 2. 👇 CRITICAL UPDATE: If a variant unit name is provided, search the product's internal nested variants list
         if it.unit and "variants" in p and p["variants"]:
@@ -981,10 +983,13 @@ async def create_order(data: CheckoutIn, current=Depends(get_current_user)):
                 target_mrp = match.get("mrp", target_mrp)
                 target_unit = match.get("unit", target_unit)
         
-        # 3. Double-check backup fallback option if payload contains explicit pricing parameters
-        if it.price is not None and it.price > 0 and not match:
-            target_price = it.price
-            target_mrp = it.mrp if it.mrp is not None else target_mrp
+        qty = round(float(it.qty), 2)
+        is_kg = bool(re.fullmatch(r"(?:1\s*)?kg", str(target_unit).strip(), re.I))
+        if is_kg:
+            if abs((qty * 4) - round(qty * 4)) > 1e-9:
+                raise HTTPException(400, f"{p['name']} must be ordered in 0.25 kg steps")
+        elif not qty.is_integer():
+            raise HTTPException(400, f"{p['name']} must be ordered in whole units")
 
         line = {
             "product_id": p["id"],
@@ -993,8 +998,8 @@ async def create_order(data: CheckoutIn, current=Depends(get_current_user)):
             "price": float(target_price),
             "mrp": float(target_mrp),
             "unit": str(target_unit),
-            "qty": int(it.qty),
-            "total": float(target_price * it.qty),
+            "qty": qty,
+            "total": round(float(target_price * qty), 2),
         }
         subtotal += line["total"]
         items_full.append(line)
@@ -1145,7 +1150,11 @@ async def admin_refresh_catalog(payload: CatalogRefreshIn, _=Depends(get_current
     docs=await db.products.find({"source_url":{"$nin":[None,""]}}).to_list(1000); results=[]
     for p in docs:
         try:
-            checked=await inspect_source(p["source_url"]); changes=proposed_update(p,checked)
+            checked=await inspect_source(p["source_url"])
+            refresh_doc = p
+            if p.get("source_market") == "seethammadhara" or p.get("brand") in {"DRB", "Digi Rythu Bazar", "Digi Rythu Bazaar"}:
+                refresh_doc = {**p, "auto_update_price": True, "auto_update_mrp": True, "auto_update_image": True}
+            changes=proposed_update(refresh_doc,checked)
             if payload.apply:
                 await db.products.update_one({"id":p["id"]},{"$set":changes,"$push":{"price_history":{"at":checked["checked_at"],"old_price":p.get("price"),"old_mrp":p.get("mrp"),"new_price":changes.get("price"),"new_mrp":changes.get("mrp"),"source_url":p["source_url"]}}})
             results.append({"id":p["id"],"name":p["name"],"status":"ready","changes":changes})

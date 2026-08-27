@@ -42,12 +42,13 @@ const AdminProducts = () => {
   const refreshReferences = async () => {
     setSyncBusy(true);
     try {
-      const preview = await api.post('/admin/catalog/refresh', { apply: false });
-      const errors = preview.data.checked - preview.data.ready;
-      if (!preview.data.checked) return toast({ title: 'No source links configured', description: 'Edit products and add their official/reference product-page links first.' });
-      if (!confirm(`Checked ${preview.data.checked} products: ${preview.data.ready} ready, ${errors} errors. Apply the valid image/reference-price changes now?`)) return;
       const applied = await api.post('/admin/catalog/refresh', { apply: true });
-      toast({ title: 'Catalogue refreshed', description: `${applied.data.ready} products updated from their configured sources.` });
+      const errors = applied.data.checked - applied.data.ready;
+      if (!applied.data.checked) return toast({ title: 'No source links configured', description: 'Edit products and add their official/reference product-page links first.' });
+      toast({
+        title: 'Catalogue refreshed',
+        description: `${applied.data.ready} products updated from Digi Rythu Bazaar${errors ? `; ${errors} could not be checked` : ''}.`
+      });
       load();
     } catch (e) { toast({ title: 'Refresh failed', description: e.response?.data?.detail || e.message, variant: 'destructive' }); }
     finally { setSyncBusy(false); }

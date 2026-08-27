@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import api from '../lib/api';
-import { useCart } from '../context/CartContext';
+import { formatQuantity, isKgUnit, quantityStep, useCart } from '../context/CartContext';
 import { Minus, Plus, ShoppingCart, Zap, ShieldCheck, Truck, RotateCcw } from 'lucide-react';
 import { inr } from '../lib/utils';
 import { Button } from '../components/ui/button';
@@ -32,6 +32,9 @@ const ProductDetail = () => {
   const currentUnit = selectedVariant ? selectedVariant.unit : p.unit;
   const currentPrice = selectedVariant ? selectedVariant.price : p.price;
   const currentMrp = selectedVariant ? selectedVariant.mrp : p.mrp;
+  const step = quantityStep({ unit: currentUnit });
+  const shownPrice = currentPrice * step;
+  const shownMrp = currentMrp * step;
   
   // Unique identification string key for the cart items (matches base or variant combination)
   const cartItemKey = selectedVariant ? `${p.id}-${selectedVariant.unit}` : p.id;
@@ -66,11 +69,11 @@ const ProductDetail = () => {
         <div>
           <div className="text-xs text-gray-500 uppercase tracking-wide">{p.brand}</div>
           <h1 className="text-2xl font-bold text-gray-900 mt-1">{p.name}</h1>
-          <div className="text-sm text-gray-500 mt-1">{currentUnit}</div>
+          <div className="text-sm text-gray-500 mt-1">{isKgUnit(currentUnit) ? '0.25 kg (price per kg divided by 4)' : currentUnit}</div>
 
           <div className="flex items-baseline gap-3 mt-4">
-            <div className="text-3xl font-black text-gray-900">{inr(currentPrice)}</div>
-            {currentMrp > currentPrice && <div className="text-lg text-gray-400 line-through">{inr(currentMrp)}</div>}
+            <div className="text-3xl font-black text-gray-900">{inr(shownPrice)}</div>
+            {currentMrp > currentPrice && <div className="text-lg text-gray-400 line-through">{inr(shownMrp)}</div>}
             {discount > 0 && <div className="bg-amber-100 text-amber-900 text-xs font-bold px-2 py-1 rounded">{discount}% OFF</div>}
           </div>
           <div className="text-xs text-gray-500 mt-1">Inclusive of all taxes</div>
@@ -110,9 +113,9 @@ const ProductDetail = () => {
           <div className="flex gap-3 mt-6">
             {inCart ? (
               <div className="flex items-center gap-3 border-2 border-[#6b3410] rounded-md">
-                <button onClick={() => update(cartItemKey, inCart.qty - 1)} className="px-3 py-2"><Minus className="w-4 h-4" /></button>
-                <span className="font-semibold min-w-[24px] text-center">{inCart.qty}</span>
-                <button onClick={() => update(cartItemKey, inCart.qty + 1)} className="px-3 py-2"><Plus className="w-4 h-4" /></button>
+                <button onClick={() => update(cartItemKey, inCart.qty - step)} className="px-3 py-2"><Minus className="w-4 h-4" /></button>
+                <span className="font-semibold min-w-[48px] text-center">{formatQuantity(inCart.qty, currentUnit)}</span>
+                <button onClick={() => update(cartItemKey, inCart.qty + step)} className="px-3 py-2"><Plus className="w-4 h-4" /></button>
               </div>
             ) : (
               <Button onClick={handleAddToCart} className="bg-[#6b3410] hover:bg-[#4d260b] gap-2"><ShoppingCart className="w-4 h-4" /> Add to Cart</Button>

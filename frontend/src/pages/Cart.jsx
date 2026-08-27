@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { useCart } from '../context/CartContext';
+import { formatQuantity, quantityStep, useCart } from '../context/CartContext';
 import { Trash2, Minus, Plus, ShoppingBag, ArrowRight, Tag, X, CheckCircle2 } from 'lucide-react';
 import { inr } from '../lib/utils';
 import { Button } from '../components/ui/button';
@@ -82,6 +82,7 @@ const Cart = () => {
         <ul className="divide-y divide-gray-100">
           {items.map(({ product, qty }) => {
             const fallbackBaseId = product.baseProductId || product.id;
+            const step = quantityStep(product);
             
             return (
               <li key={product.id} className="p-4 flex gap-4">
@@ -94,8 +95,8 @@ const Cart = () => {
                     {product.brand} • <span className="font-semibold text-[#6b3410] bg-[#6b3410]/5 px-1.5 py-0.5 rounded border border-[#6b3410]/10">{product.unit}</span>
                   </div>
                   <div className="flex items-baseline gap-2 mt-1">
-                    <span className="font-bold">{inr(product.price)}</span>
-                    {product.mrp > product.price && <span className="text-xs text-gray-400 line-through">{inr(product.mrp)}</span>}
+                    <span className="font-bold">{inr(product.price * qty)}</span>
+                    <span className="text-xs text-gray-400">({inr(product.price)} per {product.unit})</span>
                   </div>
                 </div>
                 <div className="flex flex-col items-end justify-between">
@@ -103,11 +104,11 @@ const Cart = () => {
                     <Trash2 className="w-4 h-4" />
                   </button>
                   <div className="flex items-center border-2 border-[#6b3410] rounded-md">
-                    <button onClick={() => update(product.id, qty - 1)} className="px-2 py-1">
+                    <button onClick={() => update(product.id, qty - step)} className="px-2 py-1">
                       <Minus className="w-3 h-3" />
                     </button>
-                    <span className="font-semibold px-3 text-sm">{qty}</span>
-                    <button onClick={() => update(product.id, qty + 1)} className="px-2 py-1">
+                    <span className="font-semibold px-3 text-sm">{formatQuantity(qty, product.unit)}</span>
+                    <button onClick={() => update(product.id, qty + step)} className="px-2 py-1">
                       <Plus className="w-3 h-3" />
                     </button>
                   </div>
