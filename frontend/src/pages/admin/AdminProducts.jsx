@@ -91,7 +91,7 @@ const AdminProducts = () => {
   };
 
   const load = useCallback(() => api.get('/admin/products?limit=1000').then((r) => setList(r.data)), []);
-  useEffect(() => { load(); api.get('/categories').then((r) => setCats(r.data)); }, [load]);
+  useEffect(() => { load(); api.get('/admin/categories').then((r) => setCats(r.data)); }, [load]);
 
   const openNew = () => { setEditing(null); setF(empty); setOpen(true); };
   const openEdit = (p) => { setEditing(p); setF({ ...empty, ...p, variants: p.variants || [] }); setOpen(true); };

@@ -5,7 +5,7 @@ import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog';
 import { useToast } from '../../hooks/use-toast';
-import { Plus, Pencil, Trash2, ChevronUp, ChevronDown } from 'lucide-react';
+import { Plus, Pencil, Trash2, ChevronUp, ChevronDown, Eye, EyeOff } from 'lucide-react';
 
 const ICON_OPTIONS = ['wheat', 'milk', 'apple', 'coffee', 'cookie', 'sparkles', 'spray-can', 'baby', 'utensils', 'shirt'];
 
@@ -14,9 +14,10 @@ const AdminCategories = () => {
   const [list, setList] = useState([]);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [visibilityFilter, setVisibilityFilter] = useState('all');
   const [f, setF] = useState({ slug: '', name: '', icon: 'cookie' });
 
-  const load = () => api.get('/categories').then((r) => setList(r.data));
+  const load = () => api.get('/admin/categories').then((r) => setList(r.data));
   useEffect(() => { load(); }, []);
 
   const openNew = () => { setEditing(null); setF({ slug: '', name: '', icon: 'cookie' }); setOpen(true); };
@@ -62,6 +63,23 @@ const AdminCategories = () => {
     }
   };
 
+  const setVisibility = async (category) => {
+    const active = category.active === false;
+    if (!window.confirm(`${active ? 'Restore' : 'Hide'} category "${category.name}"? Products inside it will not be deleted.`)) return;
+    try {
+      await api.patch(`/admin/categories/${category.slug}/visibility`, { active });
+      toast({ title: active ? 'Category restored' : 'Category hidden' });
+      load();
+    } catch (e) {
+      toast({ title: 'Visibility update failed', description: e.response?.data?.detail || 'Try again', variant: 'destructive' });
+    }
+  };
+
+  const filteredList = list.filter(category =>
+    visibilityFilter === 'all' ||
+    (visibilityFilter === 'active' ? category.active !== false : category.active === false)
+  );
+
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
@@ -69,34 +87,51 @@ const AdminCategories = () => {
           <h1 className="text-2xl font-bold">Categories</h1>
           <p className="text-xs text-gray-500 mt-0.5">Manage the product categories shown across the store.</p>
         </div>
-        <Button onClick={openNew} className="bg-[#6b3410] hover:bg-[#4d260b] gap-2"><Plus className="w-4 h-4" /> Add Category</Button>
+        <div className="flex items-center gap-2">
+          <select value={visibilityFilter} onChange={(event) => setVisibilityFilter(event.target.value)} className="h-10 px-3 border rounded-md bg-white text-sm">
+            <option value="all">All ({list.length})</option>
+            <option value="active">Active ({list.filter(category => category.active !== false).length})</option>
+            <option value="hidden">Hidden ({list.filter(category => category.active === false).length})</option>
+          </select>
+          <Button onClick={openNew} className="bg-[#6b3410] hover:bg-[#4d260b] gap-2"><Plus className="w-4 h-4" /> Add Category</Button>
+        </div>
       </div>
 
       <div className="bg-white border rounded-lg overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-gray-50 text-left">
-            <tr><th className="px-4 py-2 w-24">Order</th><th className="px-4 py-2">Slug</th><th className="px-4 py-2">Display name</th><th className="px-4 py-2">Icon</th><th></th></tr>
+            <tr><th className="px-4 py-2 w-24">Order</th><th className="px-4 py-2">Slug</th><th className="px-4 py-2">Display name</th><th className="px-4 py-2">Icon</th><th className="px-4 py-2">Status</th><th></th></tr>
           </thead>
           <tbody>
-            {list.map((c, idx) => (
+            {filteredList.map((c) => {
+              const idx = list.findIndex(category => category.slug === c.slug);
+              return (
               <tr key={c.slug} className="border-t hover:bg-gray-50">
                 <td className="px-4 py-2">
                   <div className="flex items-center gap-1">
-                    <button onClick={() => move(idx, -1)} disabled={idx === 0} className="p-1 rounded hover:bg-gray-200 disabled:opacity-30"><ChevronUp className="w-4 h-4" /></button>
-                    <button onClick={() => move(idx, 1)} disabled={idx === list.length - 1} className="p-1 rounded hover:bg-gray-200 disabled:opacity-30"><ChevronDown className="w-4 h-4" /></button>
+                    <button onClick={() => move(idx, -1)} disabled={visibilityFilter !== 'all' || idx === 0} className="p-1 rounded hover:bg-gray-200 disabled:opacity-30"><ChevronUp className="w-4 h-4" /></button>
+                    <button onClick={() => move(idx, 1)} disabled={visibilityFilter !== 'all' || idx === list.length - 1} className="p-1 rounded hover:bg-gray-200 disabled:opacity-30"><ChevronDown className="w-4 h-4" /></button>
                     <span className="text-xs text-gray-500 font-mono ml-1">#{idx + 1}</span>
                   </div>
                 </td>
                 <td className="px-4 py-2 font-mono text-xs">{c.slug}</td>
                 <td className="px-4 py-2 font-medium">{c.name}</td>
                 <td className="px-4 py-2">{c.icon}</td>
+                <td className="px-4 py-2">
+                  <span className={`inline-flex px-2 py-1 rounded-full text-xs font-semibold ${c.active === false ? 'bg-gray-100 text-gray-600' : 'bg-emerald-100 text-emerald-700'}`}>
+                    {c.active === false ? 'Hidden' : 'Active'}
+                  </span>
+                </td>
                 <td className="px-4 py-2 text-right">
                   <Button size="sm" variant="ghost" onClick={() => openEdit(c)}><Pencil className="w-4 h-4" /></Button>
-                  <Button size="sm" variant="ghost" onClick={() => del(c.slug)}><Trash2 className="w-4 h-4 text-red-500" /></Button>
+                  <Button size="sm" variant="ghost" onClick={() => setVisibility(c)} title={c.active === false ? 'Restore category' : 'Hide category'}>
+                    {c.active === false ? <Eye className="w-4 h-4 text-emerald-600" /> : <EyeOff className="w-4 h-4 text-gray-600" />}
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => del(c.slug)} title="Permanently delete empty category"><Trash2 className="w-4 h-4 text-red-500" /></Button>
                 </td>
               </tr>
-            ))}
-            {list.length === 0 && <tr><td colSpan="5" className="text-center py-8 text-gray-500">No categories</td></tr>}
+            )})}
+            {filteredList.length === 0 && <tr><td colSpan="6" className="text-center py-8 text-gray-500">No categories</td></tr>}
           </tbody>
         </table>
       </div>

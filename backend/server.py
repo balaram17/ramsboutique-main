@@ -394,6 +394,21 @@ async def seed_db():
         async for doc in db.categories.find({"order": {"$exists": False}}):
             await db.categories.update_one({"_id": doc["_id"]}, {"$set": {"order": 999}})
 
+    # One-time initial menu choice requested by the store administrator.
+    # The migration marker prevents later Azure restarts from hiding a category
+    # again after the administrator has restored it.
+    category_visibility_migration = "hide_personal_home_baby_categories_v1"
+    if not await db.app_migrations.find_one({"id": category_visibility_migration}):
+        await db.categories.update_many(
+            {"slug": {"$in": ["personal-care", "home-care", "baby-care"]}},
+            {"$set": {"active": False, "updated_at": now_iso()}},
+        )
+        await db.app_migrations.insert_one({
+            "id": category_visibility_migration,
+            "applied_at": now_iso(),
+        })
+        logging.info("Initially hid Personal Care, Home Care and Baby Care menu categories")
+
     if await db.products.count_documents({}) == 0:
         for p in PRODUCTS:
             doc = {
@@ -716,6 +731,12 @@ async def push_unsubscribe(sub: PushSubscribeIn, current=Depends(get_current_use
 # ============ CATEGORIES ============
 @api.get("/categories")
 async def list_categories():
+    docs = await db.categories.find({"active": {"$ne": False}}).to_list(200)
+    docs.sort(key=lambda d: (d.get("order", 1000), d.get("name", "")))
+    return [clean(d) for d in docs]
+
+@api.get("/admin/categories")
+async def admin_list_categories(_=Depends(get_current_admin)):
     docs = await db.categories.find().to_list(200)
     docs.sort(key=lambda d: (d.get("order", 1000), d.get("name", "")))
     return [clean(d) for d in docs]
@@ -729,7 +750,7 @@ async def admin_create_category(c: CategoryIn, _=Depends(get_current_admin)):
     if await db.categories.find_one({"slug": slug}):
         raise HTTPException(400, "Slug already exists")
     max_order = await db.categories.count_documents({})
-    doc = {"id": slug, "slug": slug, "name": c.name, "icon": c.icon, "order": max_order}
+    doc = {"id": slug, "slug": slug, "name": c.name, "icon": c.icon, "order": max_order, "active": True}
     await db.categories.insert_one(doc)
     return clean(doc)
 
@@ -762,6 +783,16 @@ async def admin_delete_category(slug: str, _=Depends(get_current_admin)):
     if res.deleted_count == 0:
         raise HTTPException(404, "Category not found")
     return {"ok": True}
+
+@api.patch("/admin/categories/{slug}/visibility")
+async def admin_category_visibility(slug: str, payload: ProductVisibilityIn, _=Depends(get_current_admin)):
+    result = await db.categories.update_one(
+        {"slug": slug},
+        {"$set": {"active": payload.active, "updated_at": now_iso()}},
+    )
+    if result.matched_count == 0:
+        raise HTTPException(404, "Category not found")
+    return clean(await db.categories.find_one({"slug": slug}))
 
 
 # ============ COUPONS ============
