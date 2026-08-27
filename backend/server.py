@@ -1335,7 +1335,10 @@ It reads only the selected public catalogue categories and downloads a CSV. */
       let pageCount = 1;
       do {{
         const url = `${{apiBase}}/${{encodeURIComponent(token)}}?page=${{page}}&buryOOS=true&size=100&channel=web`;
-        const response = await fetch(url, {{ credentials: "include", headers: {{ Accept: "application/json" }} }});
+        // DMart's catalogue API returns CORS-readable public data only when
+        // browser credentials are omitted. Including cookies causes the browser
+        // to reject an otherwise successful 200 response.
+        const response = await fetch(url, {{ credentials: "omit", headers: {{ Accept: "application/json" }} }});
         if (!response.ok) throw new Error(`${{token}} page ${{page}}: HTTP ${{response.status}}`);
         const data = await response.json();
         pageCount = Math.max(1, Math.ceil(Number(data.totalRecords || 0) / 100));
