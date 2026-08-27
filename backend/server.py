@@ -50,7 +50,7 @@ origins = [
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -1257,19 +1257,21 @@ async def admin_notifications_read_all(_=Depends(get_current_admin)):
 async def admin_dmart_categories(_=Depends(get_current_admin)):
     saved = await db.dmart_categories.find().to_list(100)
     by_token = {item.get("token"): item for item in saved}
+    imported = await db.products.find(
+        {"source_market": "dmart"}, {"source_category_token": 1, "name": 1}
+    ).to_list(50000)
+    counts = {}
+    for product in imported:
+        if str(product.get("name") or "").strip().casefold().startswith("dmart"):
+            continue
+        token = product.get("source_category_token")
+        counts[token] = counts.get(token, 0) + 1
     result = []
     for token, name in DMART_CATEGORIES:
         current = by_token.get(token, {})
-        category_products = await db.products.find(
-            {"source_market": "dmart", "source_category_token": token}, {"name": 1}
-        ).to_list(5000)
-        product_count = sum(
-            1 for product in category_products
-            if not str(product.get("name") or "").strip().casefold().startswith("dmart")
-        )
         result.append({
             "token": token, "name": name, "enabled": bool(current.get("enabled", False)),
-            "product_count": product_count, "total_records": current.get("total_records", 0),
+            "product_count": counts.get(token, 0), "total_records": current.get("total_records", 0),
             "last_synced_at": current.get("last_synced_at"), "last_error": current.get("last_error"),
         })
     return {"pincode": DMART_PINCODE, "categories": result}
@@ -1429,18 +1431,31 @@ async def admin_import_dmart_csv(payload: DmartCsvImportIn, _=Depends(get_curren
         await create_admin_notification("DMart CSV validation failed", f"{len(errors)} row(s) need correction. No products were changed.", details=errors[:50])
         raise HTTPException(400, {"message": "DMart CSV validation failed", "errors": errors[:50]})
 
+    async def cosmos_write(action, attempts=8):
+        for attempt in range(1, attempts + 1):
+            try:
+                return await action()
+            except Exception as exc:
+                throttled = getattr(exc, "code", None) == 16500 or "16500" in str(exc)
+                if not throttled or attempt == attempts:
+                    raise
+                await asyncio.sleep(max(0.25, attempt * 0.35))
+
+    # Create each selected storefront category once, not once per product.
+    for token in seen_by_category:
+        category_slug = "dmart-" + re.sub(r"[^a-z0-9]+", "-", token.lower()).strip("-")
+        await cosmos_write(lambda token=token, category_slug=category_slug: db.categories.update_one(
+            {"slug": category_slug},
+            {"$setOnInsert": {"id": category_slug, "slug": category_slug, "name": known[token], "icon": "shopping-basket", "order": 100, "active": True}},
+            upsert=True,
+        ))
+
     added = updated = hidden = 0
     operation_errors = []
     for token, sku_id, name, mrp, row in prepared:
         try:
             category_slug = "dmart-" + re.sub(r"[^a-z0-9]+", "-", token.lower()).strip("-")
-            await db.categories.update_one(
-                {"slug": category_slug},
-                {"$setOnInsert": {"id": category_slug, "slug": category_slug, "name": known[token], "icon": "shopping-basket", "order": 100, "active": True}},
-                upsert=True,
-            )
             source_key = f"dmart:{sku_id}"
-            existing = await db.products.find_one({"source_key": source_key}, {"_id": 1})
             values = {
                 "source_market": "dmart", "source_key": source_key,
                 "source_product_id": (row.get("product_id") or "").strip(), "source_sku_id": sku_id,
@@ -1456,25 +1471,26 @@ async def admin_import_dmart_csv(payload: DmartCsvImportIn, _=Depends(get_curren
                 "auto_update_mrp": True, "auto_update_image": True, "active": True,
                 "inactive_reason": None, "source_checked_at": now_iso(), "source_status": "ok", "updated_at": now_iso(),
             }
-            await db.products.update_one(
+            result = await cosmos_write(lambda source_key=source_key, values=values: db.products.update_one(
                 {"source_key": source_key},
                 {"$set": values, "$setOnInsert": {"id": source_key, "created_at": now_iso()}}, upsert=True,
-            )
-            if existing: updated += 1
-            else: added += 1
+            ))
+            if result.upserted_id is not None: added += 1
+            else: updated += 1
+            await asyncio.sleep(0.06)
         except Exception as exc:
             operation_errors.append(f"{name}: {str(exc)[:250]}")
 
     for token, seen in seen_by_category.items():
-        result = await db.products.update_many(
+        result = await cosmos_write(lambda token=token, seen=seen: db.products.update_many(
             {"source_market": "dmart", "source_category_token": token,
              "source_sku_id": {"$nin": list(seen)}, "active": {"$ne": False}},
             {"$set": {"active": False, "inactive_reason": "missing_from_dmart_csv", "updated_at": now_iso()}},
-        )
+        ))
         hidden += result.modified_count
-        await db.dmart_categories.update_one(
+        await cosmos_write(lambda token=token, seen=seen: db.dmart_categories.update_one(
             {"token": token}, {"$set": {"last_synced_at": now_iso(), "last_error": None, "total_records": len(seen)}},
-        )
+        ))
     if operation_errors:
         await create_admin_notification("DMart CSV import errors", f"{len(operation_errors)} product(s) could not be imported.", details=operation_errors[:50])
     return {"added": added, "updated": updated, "hidden": hidden, "failed": len(operation_errors), "errors": operation_errors[:50]}
