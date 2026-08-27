@@ -1,10 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { CheckSquare, Download, RefreshCw, Save, Square } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { CheckSquare, Download, Save, Square, Upload } from 'lucide-react';
 import api from '../../lib/api';
 import { Button } from '../../components/ui/button';
 import { useToast } from '../../hooks/use-toast';
-
-const finished = new Set(['completed', 'completed_with_errors', 'failed']);
 
 const AdminDmart = () => {
   const { toast } = useToast();
@@ -12,7 +10,8 @@ const AdminDmart = () => {
   const [selected, setSelected] = useState(new Set());
   const [pincode, setPincode] = useState('530016');
   const [saving, setSaving] = useState(false);
-  const [job, setJob] = useState(null);
+  const [importing, setImporting] = useState(false);
+  const csvInputRef = useRef(null);
 
   const load = async () => {
     const { data } = await api.get('/admin/dmart/categories');
@@ -22,26 +21,6 @@ const AdminDmart = () => {
   };
 
   useEffect(() => { load().catch(() => {}); }, []);
-  useEffect(() => {
-    if (!job?.id || finished.has(job.status)) return undefined;
-    const timer = setInterval(async () => {
-      try {
-        const { data } = await api.get(`/admin/dmart/sync/${job.id}`);
-        setJob({ ...data, id: data.id });
-        if (finished.has(data.status)) {
-          clearInterval(timer);
-          await load();
-          window.dispatchEvent(new Event('admin-notifications-updated'));
-          toast({
-            title: data.status === 'completed' ? 'DMart sync completed' : 'DMart sync needs attention',
-            description: `Added ${data.added || 0}, updated ${data.updated || 0}, hidden ${data.hidden || 0}.`,
-            variant: data.status === 'completed' ? undefined : 'destructive',
-          });
-        }
-      } catch (_) { /* keep polling; transient Azure failures recover */ }
-    }, 2500);
-    return () => clearInterval(timer);
-  }, [job?.id, job?.status, toast]);
 
   const activeCount = useMemo(() => categories.reduce((sum, item) => sum + (item.product_count || 0), 0), [categories]);
   const toggle = (token) => setSelected((current) => {
@@ -61,17 +40,43 @@ const AdminDmart = () => {
     } finally { setSaving(false); }
   };
 
-  const sync = async () => {
+  const downloadBrowserScript = async () => {
     if (!selected.size) return toast({ title: 'Select at least one category', variant: 'destructive' });
     try {
       await api.put('/admin/dmart/categories', { tokens: [...selected] });
-      const { data } = await api.post('/admin/dmart/sync', { tokens: [...selected] });
-      setJob({ id: data.job_id, status: data.status, category_done: 0, category_total: selected.size });
-      toast({ title: data.already_running ? 'DMart sync already running' : 'DMart sync started', description: 'You can leave this page. Progress is stored in the database.' });
+      const response = await api.get('/admin/dmart/export-script.js', {
+        params: { tokens: [...selected].join(',') }, responseType: 'blob'
+      });
+      const url = URL.createObjectURL(response.data);
+      const link = document.createElement('a');
+      link.href = url; link.download = 'dmart-browser-export.js'; link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      toast({ title: 'Browser export script downloaded', description: 'Open the file, copy all code, and run it in the Console on dmart.in.' });
+      await load();
     } catch (error) {
-      toast({ title: 'Sync failed to start', description: error.response?.data?.detail || error.message, variant: 'destructive' });
-      window.dispatchEvent(new Event('admin-notifications-updated'));
+      toast({ title: 'Script download failed', description: error.response?.data?.detail || error.message, variant: 'destructive' });
     }
+  };
+
+  const importCsv = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    setImporting(true);
+    try {
+      const { data } = await api.post('/admin/dmart/import-csv', { csv_text: await file.text() });
+      toast({
+        title: data.failed ? 'DMart CSV imported with errors' : 'DMart CSV imported',
+        description: `Added ${data.added}, updated ${data.updated}, hidden ${data.hidden}, failed ${data.failed}.`,
+        variant: data.failed ? 'destructive' : undefined,
+      });
+      await load();
+      window.dispatchEvent(new Event('admin-notifications-updated'));
+    } catch (error) {
+      const detail = error.response?.data?.detail;
+      toast({ title: 'DMart CSV import failed', description: typeof detail === 'string' ? detail : detail?.message || error.message, variant: 'destructive' });
+      window.dispatchEvent(new Event('admin-notifications-updated'));
+    } finally { setImporting(false); }
   };
 
   const downloadCsv = async () => {
@@ -86,9 +91,6 @@ const AdminDmart = () => {
     }
   };
 
-  const busy = job && !finished.has(job.status);
-  const progress = job?.category_total ? Math.round((job.category_done || 0) * 100 / job.category_total) : 0;
-
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -98,8 +100,10 @@ const AdminDmart = () => {
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={downloadCsv}><Download className="w-4 h-4 mr-2" />Export Live CSV</Button>
-          <Button variant="outline" onClick={save} disabled={saving || busy}><Save className="w-4 h-4 mr-2" />Save Selection</Button>
-          <Button onClick={sync} disabled={busy} className="bg-[#6b3410] hover:bg-[#4d260b]"><RefreshCw className={`w-4 h-4 mr-2 ${busy ? 'animate-spin' : ''}`} />Sync Selected</Button>
+          <Button variant="outline" onClick={save} disabled={saving || importing}><Save className="w-4 h-4 mr-2" />Save Selection</Button>
+          <Button variant="outline" onClick={downloadBrowserScript}><Download className="w-4 h-4 mr-2" />Download Export Script</Button>
+          <input ref={csvInputRef} type="file" accept=".csv,text/csv" className="hidden" onChange={importCsv} />
+          <Button onClick={() => csvInputRef.current?.click()} disabled={importing} className="bg-[#6b3410] hover:bg-[#4d260b]"><Upload className="w-4 h-4 mr-2" />{importing ? 'Importing…' : 'Upload DMart CSV'}</Button>
         </div>
       </div>
 
@@ -109,17 +113,8 @@ const AdminDmart = () => {
         <div className="bg-white border rounded-lg p-4"><div className="text-xs text-gray-500">Price rule</div><div className="text-lg font-bold text-emerald-700">MRP only</div></div>
       </div>
 
-      {job && (
-        <div className={`border rounded-lg p-4 ${job.status === 'failed' || job.status === 'completed_with_errors' ? 'bg-red-50 border-red-200' : 'bg-white'}`}>
-          <div className="flex justify-between text-sm mb-2"><span className="font-semibold">Sync: {job.status.replaceAll('_', ' ')}</span><span>{progress}%</span></div>
-          <div className="h-2 bg-gray-200 rounded-full overflow-hidden"><div className="h-full bg-[#f7941d] transition-all" style={{ width: `${progress}%` }} /></div>
-          <div className="text-xs text-gray-600 mt-2">Category {job.category_done || 0}/{job.category_total || 0}{job.current_category ? ` · ${job.current_category}` : ''} · Added {job.added || 0} · Updated {job.updated || 0} · Hidden {job.hidden || 0}</div>
-          {!!job.errors?.length && <div className="text-xs text-red-700 mt-2">Latest error: {job.errors[job.errors.length - 1]}</div>}
-        </div>
-      )}
-
       <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-900">
-        Unchecking a category hides its DMart products; it does not delete them. Recheck it and sync to restore and update them. DMart availability can vary by delivery location, while this import deliberately stores the public MRP as both website price and MRP.
+        Workflow: select categories and save → download the export script → open dmart.in with your delivery location selected → copy the complete script into the browser Console → upload the generated dmart-selected-products.csv here. Unchecking a category hides products without deleting them. Only MRP is imported, and DMart-own-label names are excluded.
       </div>
 
       <div className="bg-white border rounded-lg overflow-x-auto">

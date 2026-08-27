@@ -9,6 +9,7 @@ import os
 import asyncio
 import csv
 import io
+import json
 import hashlib
 import random
 import logging
@@ -173,6 +174,9 @@ class DmartCategorySelectionIn(BaseModel):
 
 class DmartSyncIn(BaseModel):
     tokens: Optional[List[str]] = None
+
+class DmartCsvImportIn(BaseModel):
+    csv_text: str = Field(min_length=1, max_length=25_000_000)
 
 class ProductVisibilityIn(BaseModel):
     active: bool
@@ -1300,6 +1304,176 @@ async def admin_save_dmart_categories(payload: DmartCategorySelectionIn, _=Depen
             )
             hidden += result.modified_count
     return {"selected": len(selected), "hidden": hidden, "restored": restored}
+
+
+@api.get("/admin/dmart/export-script.js")
+async def admin_dmart_export_script(tokens: str = "", _=Depends(get_current_admin)):
+    known = {token for token, _name in DMART_CATEGORIES}
+    requested = [token.strip() for token in tokens.split(",") if token.strip()]
+    selected = list(dict.fromkeys(requested))
+    if not selected:
+        configured = await db.dmart_categories.find({"enabled": True}).to_list(100)
+        selected = [item["token"] for item in configured]
+    if not selected:
+        raise HTTPException(400, "Select and save at least one DMart category first")
+    if set(selected) - known:
+        raise HTTPException(400, "One or more selected DMart categories are invalid")
+    selected_json = json.dumps(selected)
+    script = f'''/* Rams Boutique DMart CSV exporter.
+Run this entire file in the browser Console while signed into https://www.dmart.in/.
+It reads only the selected public catalogue categories and downloads a CSV. */
+(async () => {{
+  const categories = {selected_json};
+  const apiBase = "https://digital.dmart.in/api/v3/plp";
+  const rows = [];
+  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const csvCell = value => `"${{String(value ?? "").replaceAll('"', '""')}}"`;
+  try {{
+    for (const token of categories) {{
+      console.log(`Reading DMart category: ${{token}}`);
+      let page = 1;
+      let pageCount = 1;
+      do {{
+        const url = `${{apiBase}}/${{encodeURIComponent(token)}}?page=${{page}}&buryOOS=true&size=100&channel=web`;
+        const response = await fetch(url, {{ credentials: "include", headers: {{ Accept: "application/json" }} }});
+        if (!response.ok) throw new Error(`${{token}} page ${{page}}: HTTP ${{response.status}}`);
+        const data = await response.json();
+        pageCount = Math.max(1, Math.ceil(Number(data.totalRecords || 0) / 100));
+        for (const product of data.products || []) {{
+          const levels = Object.fromEntries((product.categoryMap || []).map(item => [item.level, item.name || ""]));
+          for (const sku of product.sKUs || []) {{
+            const name = String(sku.name || product.name || "").trim();
+            if (!name || name.toLowerCase().startsWith("dmart")) continue;
+            const mrp = Number(sku.priceMRP || 0);
+            if (!(mrp > 0)) continue;
+            const key = String(sku.imageKey || sku.productImageKey || "").replace(/^\\/+|\\/+$/g, "");
+            rows.push({{
+              category_token: token, category_l1: levels.L1 || "", category_l2: levels.L2 || "",
+              category_l3: levels.L3 || "", product_id: product.productId || "",
+              sku_id: sku.skuUniqueID || "", name, brand: product.manufacturer || "DMart",
+              unit: sku.variantTextValue || "piece", mrp: mrp.toFixed(2),
+              image_url: key ? `https://cdn.dmart.in/images/products/${{key}}_5_P.jpg` : "",
+              source_url: `https://www.dmart.in${{product.targetUrl || "/"}}`, active: "true"
+            }});
+          }}
+        }}
+        console.log(`${{token}}: page ${{page}} of ${{pageCount}}`);
+        page += 1;
+        await sleep(150);
+      }} while (page <= pageCount);
+    }}
+    const headers = ["category_token","category_l1","category_l2","category_l3","product_id","sku_id","name","brand","unit","mrp","image_url","source_url","active"];
+    const csv = [headers.map(csvCell).join(","), ...rows.map(row => headers.map(key => csvCell(row[key])).join(","))].join("\\r\\n");
+    const blob = new Blob(["\\uFEFF" + csv], {{ type: "text/csv;charset=utf-8" }});
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob); link.download = "dmart-selected-products.csv"; link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+    console.log(`Downloaded ${{rows.length}} non-DMart-own-label products.`);
+    alert(`DMart export complete: ${{rows.length}} products. Upload dmart-selected-products.csv in Rams Boutique Admin.`);
+  }} catch (error) {{
+    console.error("DMart export failed", error);
+    alert(`DMart export failed: ${{error.message}}. Refresh DMart Ready, confirm your delivery location, and try again.`);
+  }}
+}})();
+'''
+    return Response(
+        content=script, media_type="application/javascript; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename=dmart-browser-export.js"},
+    )
+
+
+@api.post("/admin/dmart/import-csv")
+async def admin_import_dmart_csv(payload: DmartCsvImportIn, _=Depends(get_current_admin)):
+    required = {"category_token", "product_id", "sku_id", "name", "brand", "unit", "mrp", "image_url", "source_url", "active"}
+    known = dict(DMART_CATEGORIES)
+    try:
+        reader = csv.DictReader(payload.csv_text.lstrip("\ufeff").splitlines())
+        missing = sorted(required - set(reader.fieldnames or []))
+        if missing:
+            raise ValueError("Missing CSV columns: " + ", ".join(missing))
+        rows = list(reader)
+    except Exception as exc:
+        await create_admin_notification("DMart CSV import failed", str(exc))
+        raise HTTPException(400, str(exc))
+    if not rows:
+        raise HTTPException(400, "The DMart CSV contains no products")
+
+    enabled_docs = await db.dmart_categories.find({"enabled": True}).to_list(100)
+    enabled = {item.get("token") for item in enabled_docs}
+    prepared, errors, seen_by_category = [], [], {}
+    for line_no, row in enumerate(rows, start=2):
+        try:
+            token = (row.get("category_token") or "").strip()
+            if token not in known:
+                raise ValueError(f"unknown category token '{token}'")
+            if token not in enabled:
+                raise ValueError(f"category '{token}' is not enabled in Admin")
+            sku_id = (row.get("sku_id") or "").strip()
+            name = (row.get("name") or "").strip()
+            if not sku_id or not name:
+                raise ValueError("SKU ID and name are required")
+            if name.casefold().startswith("dmart"):
+                continue
+            mrp = round(float(row.get("mrp") or 0), 2)
+            if mrp <= 0:
+                raise ValueError("MRP must be greater than zero")
+            prepared.append((token, sku_id, name, mrp, row))
+            seen_by_category.setdefault(token, set()).add(sku_id)
+        except Exception as exc:
+            errors.append(f"Row {line_no}: {exc}")
+    if errors:
+        await create_admin_notification("DMart CSV validation failed", f"{len(errors)} row(s) need correction. No products were changed.", details=errors[:50])
+        raise HTTPException(400, {"message": "DMart CSV validation failed", "errors": errors[:50]})
+
+    added = updated = hidden = 0
+    operation_errors = []
+    for token, sku_id, name, mrp, row in prepared:
+        try:
+            category_slug = "dmart-" + re.sub(r"[^a-z0-9]+", "-", token.lower()).strip("-")
+            await db.categories.update_one(
+                {"slug": category_slug},
+                {"$setOnInsert": {"id": category_slug, "slug": category_slug, "name": known[token], "icon": "shopping-basket", "order": 100, "active": True}},
+                upsert=True,
+            )
+            source_key = f"dmart:{sku_id}"
+            existing = await db.products.find_one({"source_key": source_key}, {"_id": 1})
+            values = {
+                "source_market": "dmart", "source_key": source_key,
+                "source_product_id": (row.get("product_id") or "").strip(), "source_sku_id": sku_id,
+                "source_category_token": token, "source_pincode": DMART_PINCODE,
+                "source_category_l1": (row.get("category_l1") or "").strip(),
+                "source_category_l2": (row.get("category_l2") or "").strip(),
+                "source_category_l3": (row.get("category_l3") or "").strip(),
+                "name": name, "brand": (row.get("brand") or "DMart").strip(),
+                "category": category_slug, "sub": (row.get("category_l2") or known[token]).strip(),
+                "price": mrp, "mrp": mrp, "unit": (row.get("unit") or "piece").strip(),
+                "image": (row.get("image_url") or "").strip(), "desc": "", "stock": 100, "variants": [],
+                "source_url": (row.get("source_url") or "").strip(), "auto_update_price": True,
+                "auto_update_mrp": True, "auto_update_image": True, "active": True,
+                "inactive_reason": None, "source_checked_at": now_iso(), "source_status": "ok", "updated_at": now_iso(),
+            }
+            await db.products.update_one(
+                {"source_key": source_key},
+                {"$set": values, "$setOnInsert": {"id": source_key, "created_at": now_iso()}}, upsert=True,
+            )
+            if existing: updated += 1
+            else: added += 1
+        except Exception as exc:
+            operation_errors.append(f"{name}: {str(exc)[:250]}")
+
+    for token, seen in seen_by_category.items():
+        result = await db.products.update_many(
+            {"source_market": "dmart", "source_category_token": token,
+             "source_sku_id": {"$nin": list(seen)}, "active": {"$ne": False}},
+            {"$set": {"active": False, "inactive_reason": "missing_from_dmart_csv", "updated_at": now_iso()}},
+        )
+        hidden += result.modified_count
+        await db.dmart_categories.update_one(
+            {"token": token}, {"$set": {"last_synced_at": now_iso(), "last_error": None, "total_records": len(seen)}},
+        )
+    if operation_errors:
+        await create_admin_notification("DMart CSV import errors", f"{len(operation_errors)} product(s) could not be imported.", details=operation_errors[:50])
+    return {"added": added, "updated": updated, "hidden": hidden, "failed": len(operation_errors), "errors": operation_errors[:50]}
 
 
 async def run_dmart_job(job_id, tokens):
