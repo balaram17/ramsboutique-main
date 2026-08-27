@@ -7,7 +7,7 @@ import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { Textarea } from '../../components/ui/textarea';
 import { useToast } from '../../hooks/use-toast';
-import { Plus, Pencil, Trash2, Percent, TrendingUp, TrendingDown, RefreshCw, Upload } from 'lucide-react';
+import { Plus, Pencil, Trash2, Percent, TrendingUp, TrendingDown, RefreshCw, Upload, Download, Eye, EyeOff } from 'lucide-react';
 
 const empty = { 
   name: '', 
@@ -39,6 +39,7 @@ const AdminProducts = () => {
   const [globalBusy, setGlobalBusy] = useState(false);
   const [syncBusy, setSyncBusy] = useState(false);
   const [csvBusy, setCsvBusy] = useState(false);
+  const [visibilityFilter, setVisibilityFilter] = useState('all');
   const csvInputRef = useRef(null);
 
   const syncCsv = async (event) => {
@@ -48,14 +49,14 @@ const AdminProducts = () => {
     if (!file.name.toLowerCase().endsWith('.csv')) {
       return toast({ title: 'Invalid file', description: 'Select seethammadhara_products.csv.', variant: 'destructive' });
     }
-    if (!confirm(`Synchronize the catalogue from ${file.name}? Rows removed from the CSV will be hidden from the website.`)) return;
+    if (!confirm(`Synchronize visibility and product details from ${file.name}? The active column controls which products appear on the website.`)) return;
     setCsvBusy(true);
     try {
       const csv_text = await file.text();
       const { data } = await api.post('/admin/catalog/sync-csv', { csv_text });
       toast({
         title: data.failed ? 'CSV sync completed with errors' : 'CSV sync completed',
-        description: `Added ${data.added}, updated ${data.updated}, deactivated ${data.deactivated}, failed ${data.failed}.`,
+        description: `Added ${data.added}, updated ${data.updated}, hidden ${data.hidden}, restored ${data.restored}, failed ${data.failed}.`,
         variant: data.failed ? 'destructive' : undefined,
       });
       window.dispatchEvent(new Event('admin-notifications-updated'));
@@ -89,7 +90,7 @@ const AdminProducts = () => {
     finally { setSyncBusy(false); }
   };
 
-  const load = useCallback(() => api.get('/products?limit=500').then((r) => setList(r.data)), []);
+  const load = useCallback(() => api.get('/admin/products?limit=1000').then((r) => setList(r.data)), []);
   useEffect(() => { load(); api.get('/categories').then((r) => setCats(r.data)); }, [load]);
 
   const openNew = () => { setEditing(null); setF(empty); setOpen(true); };
@@ -134,6 +135,49 @@ const AdminProducts = () => {
     await api.delete(`/admin/products/${id}`);
     toast({ title: 'Deleted' }); 
     load();
+  };
+
+  const setVisibility = async (product) => {
+    const active = product.active === false;
+    const action = active ? 'restore' : 'hide';
+    if (!confirm(`${action === 'hide' ? 'Hide' : 'Restore'} ${product.name}?`)) return;
+    try {
+      await api.patch(`/admin/products/${product.id}/visibility`, { active });
+      toast({ title: active ? 'Product restored' : 'Product hidden' });
+      load();
+    } catch (e) {
+      toast({ title: `Unable to ${action} product`, description: e.response?.data?.detail || e.message, variant: 'destructive' });
+    }
+  };
+
+  const exportMasterCsv = () => {
+    const headings = ['product_id','name','category','name_telugu','name_hindi','description','unit','price','mrp','image_url','source_url','active'];
+    const rows = list
+      .filter(product => product.source_market === 'seethammadhara')
+      .map(product => ({
+        product_id: product.source_product_id || product.source_key || '',
+        name: product.name || '',
+        category: product.sub || '',
+        name_telugu: product.name_te || '',
+        name_hindi: product.name_hi || '',
+        description: product.desc || '',
+        unit: product.unit || '',
+        price: product.price ?? '',
+        mrp: product.mrp ?? '',
+        image_url: product.image || '',
+        source_url: product.source_url || '',
+        active: product.active !== false,
+      }));
+    const escapeCsv = value => `"${String(value ?? '').replaceAll('"', '""')}"`;
+    const csv = [headings, ...rows.map(row => headings.map(heading => row[heading]))]
+      .map(row => row.map(escapeCsv).join(','))
+      .join('\r\n');
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = 'seethammadhara_products_master.csv';
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
   };
 
   const addVariant = () => {
@@ -192,8 +236,12 @@ const AdminProducts = () => {
   };
 
   const filteredList = useMemo(() => {
-    return list.filter(p => p.name.toLowerCase().includes(q.toLowerCase()) || p.brand.toLowerCase().includes(q.toLowerCase()));
-  }, [list, q]);
+    return list.filter(p => {
+      const matchesText = p.name?.toLowerCase().includes(q.toLowerCase()) || p.brand?.toLowerCase().includes(q.toLowerCase());
+      const matchesVisibility = visibilityFilter === 'all' || (visibilityFilter === 'active' ? p.active !== false : p.active === false);
+      return matchesText && matchesVisibility;
+    });
+  }, [list, q, visibilityFilter]);
 
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-6">
@@ -203,6 +251,9 @@ const AdminProducts = () => {
           <input ref={csvInputRef} type="file" accept=".csv,text/csv" onChange={syncCsv} className="hidden" />
           <Button variant="outline" onClick={() => csvInputRef.current?.click()} disabled={csvBusy || syncBusy} className="gap-2">
             <Upload className={`h-4 w-4 ${csvBusy?'animate-pulse':''}`} /> {csvBusy ? 'Synchronizing…' : 'Sync Products from CSV'}
+          </Button>
+          <Button variant="outline" onClick={exportMasterCsv} disabled={!list.length} className="gap-2">
+            <Download className="h-4 w-4" /> Export Master CSV
           </Button>
           <Button variant="outline" onClick={refreshReferences} disabled={syncBusy || csvBusy} className="gap-2"><RefreshCw className={`h-4 w-4 ${syncBusy?'animate-spin':''}`} /> Refresh Images & Vizag Prices</Button><Button onClick={openNew} className="gap-2 bg-emerald-600 hover:bg-emerald-700 text-white">
           <Plus className="h-4 w-4" /> Add Product
@@ -247,13 +298,18 @@ const AdminProducts = () => {
         </div>
       </div>
 
-      <div className="flex gap-4">
+      <div className="flex gap-4 flex-wrap">
         <Input 
           placeholder="Search products..." 
           value={q} 
           onChange={(e) => setQ(e.target.value)} 
           className="max-w-md shadow-sm bg-white"
         />
+        <select value={visibilityFilter} onChange={(event) => setVisibilityFilter(event.target.value)} className="h-10 px-3 border rounded-md bg-white text-sm">
+          <option value="all">All products ({list.length})</option>
+          <option value="active">Active ({list.filter(product => product.active !== false).length})</option>
+          <option value="hidden">Hidden ({list.filter(product => product.active === false).length})</option>
+        </select>
       </div>
 
       <div className="border rounded-lg overflow-hidden bg-white shadow-sm">
@@ -264,6 +320,7 @@ const AdminProducts = () => {
               <th className="p-4">Category</th>
               <th className="p-4">Base Pricing</th>
               <th className="p-4">Variants</th>
+              <th className="p-4">Status</th>
               <th className="p-4 text-right">Actions</th>
             </tr>
           </thead>
@@ -292,13 +349,24 @@ const AdminProducts = () => {
                     <span className="text-xs text-slate-400 italic">None</span>
                   )}
                 </td>
+                <td className="p-4">
+                  <span className={`inline-flex px-2 py-1 rounded-full text-xs font-semibold ${p.active === false ? 'bg-gray-100 text-gray-600' : 'bg-emerald-100 text-emerald-700'}`}>
+                    {p.active === false ? 'Hidden' : 'Active'}
+                  </span>
+                </td>
                 <td className="p-4 text-right space-x-2 whitespace-nowrap">
                   <Button variant="outline" size="icon" onClick={() => openEdit(p)}>
                     <Pencil className="h-4 w-4 text-slate-600" />
                   </Button>
-                  <Button variant="outline" size="icon" onClick={() => del(p.id)} className="border-red-200 hover:bg-red-50">
-                    <Trash2 className="h-4 w-4 text-red-600" />
-                  </Button>
+                  {p.source_market === 'seethammadhara' ? (
+                    <Button variant="outline" size="icon" onClick={() => setVisibility(p)} title={p.active === false ? 'Restore product' : 'Hide product'}>
+                      {p.active === false ? <Eye className="h-4 w-4 text-emerald-600" /> : <EyeOff className="h-4 w-4 text-gray-600" />}
+                    </Button>
+                  ) : (
+                    <Button variant="outline" size="icon" onClick={() => del(p.id)} className="border-red-200 hover:bg-red-50">
+                      <Trash2 className="h-4 w-4 text-red-600" />
+                    </Button>
+                  )}
                 </td>
               </tr>
             ))}

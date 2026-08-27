@@ -164,6 +164,9 @@ class CatalogRefreshIn(BaseModel):
 class CatalogCsvSyncIn(BaseModel):
     csv_text: str = Field(min_length=1, max_length=5_000_000)
 
+class ProductVisibilityIn(BaseModel):
+    active: bool
+
 
 class AgentIn(BaseModel):
     name: str
@@ -462,6 +465,7 @@ async def seed_db():
                     "auto_update_price": True,
                     "auto_update_mrp": True,
                     "auto_update_image": True,
+                    "active": str(row.get("active") or "true").strip().lower() not in {"false", "0", "no", "hidden", "inactive"},
                     "created_at": now_iso(),
                 }
                 await db.products.update_one(
@@ -1136,6 +1140,11 @@ async def admin_create_product(p: ProductIn, _=Depends(get_current_admin)):
     await db.products.insert_one(doc)
     return clean(doc)
 
+@api.get("/admin/products")
+async def admin_list_products(limit: int = Query(default=1000, ge=1, le=2000), _=Depends(get_current_admin)):
+    docs = await db.products.find().limit(limit).to_list(limit)
+    return [clean(doc) for doc in docs]
+
 
 @api.patch("/admin/products/{pid}")
 async def admin_update_product(pid: str, p: ProductIn, _=Depends(get_current_admin)):
@@ -1159,6 +1168,20 @@ async def admin_delete_product(pid: str, _=Depends(get_current_admin)):
     else:
         await db.products.delete_one({"id": pid})
     return {"ok": True}
+
+@api.patch("/admin/products/{pid}/visibility")
+async def admin_product_visibility(pid: str, payload: ProductVisibilityIn, _=Depends(get_current_admin)):
+    result = await db.products.update_one(
+        {"id": pid},
+        {"$set": {
+            "active": payload.active,
+            "inactive_reason": None if payload.active else "admin_hidden",
+            "updated_at": now_iso(),
+        }},
+    )
+    if result.matched_count == 0:
+        raise HTTPException(404, "Not found")
+    return clean(await db.products.find_one({"id": pid}))
 
 async def create_admin_notification(title: str, message: str, level: str = "error", details=None):
     doc = {
@@ -1185,7 +1208,7 @@ async def admin_notifications_read_all(_=Depends(get_current_admin)):
 
 @api.post("/admin/catalog/sync-csv")
 async def admin_sync_catalog_csv(payload: CatalogCsvSyncIn, _=Depends(get_current_admin)):
-    required = {"product_id", "name", "category", "unit", "price", "mrp", "image_url", "source_url"}
+    required = {"product_id", "name", "category", "unit", "price", "mrp", "image_url", "source_url", "active"}
     try:
         reader = csv.DictReader(payload.csv_text.lstrip("\ufeff").splitlines())
         headers = set(reader.fieldnames or [])
@@ -1222,11 +1245,15 @@ async def admin_sync_catalog_csv(payload: CatalogCsvSyncIn, _=Depends(get_curren
             mrp = float(row.get("mrp") or price)
             if price < 0 or mrp < price:
                 raise ValueError("price must be non-negative and MRP cannot be below price")
+            active_text = str(row.get("active") or "").strip().lower()
+            if active_text not in {"true", "false", "1", "0", "yes", "no", "active", "inactive", "visible", "hidden"}:
+                raise ValueError("active must be true or false")
+            row_active = active_text in {"true", "1", "yes", "active", "visible"}
             source_category = (row.get("category") or "Groceries").strip()
             category, category_name, category_icon = category_map.get(
                 source_category.lower(), ("grocery", "Grocery & Staples", "wheat")
             )
-            prepared.append((raw_key, row, name, price, mrp, source_category, category, category_name, category_icon))
+            prepared.append((raw_key, row, name, price, mrp, row_active, source_category, category, category_name, category_icon))
         except Exception as exc:
             validation_errors.append(f"Row {line_no}: {exc}")
 
@@ -1240,9 +1267,9 @@ async def admin_sync_catalog_csv(payload: CatalogCsvSyncIn, _=Depends(get_curren
 
     existing_docs = await db.products.find({"source_market": "seethammadhara"}).to_list(1000)
     existing_by_key = {doc.get("source_key"): doc for doc in existing_docs}
-    added = updated = deactivated = failed = 0
+    added = updated = hidden = restored = failed = 0
     operation_errors = []
-    for raw_key, row, name, price, mrp, source_category, category, category_name, category_icon in prepared:
+    for raw_key, row, name, price, mrp, row_active, source_category, category, category_name, category_icon in prepared:
         try:
             await db.categories.update_one(
                 {"id": category},
@@ -1268,8 +1295,8 @@ async def admin_sync_catalog_csv(payload: CatalogCsvSyncIn, _=Depends(get_curren
                 "auto_update_price": True,
                 "auto_update_mrp": True,
                 "auto_update_image": True,
-                "active": True,
-                "inactive_reason": None,
+                "active": row_active,
+                "inactive_reason": None if row_active else "hidden_by_csv",
                 "updated_at": now_iso(),
             }
             await db.products.update_one(
@@ -1279,32 +1306,24 @@ async def admin_sync_catalog_csv(payload: CatalogCsvSyncIn, _=Depends(get_curren
             )
             if raw_key in existing_by_key:
                 updated += 1
+                was_active = existing_by_key[raw_key].get("active", True)
+                if was_active and not row_active:
+                    hidden += 1
+                elif not was_active and row_active:
+                    restored += 1
             else:
                 added += 1
         except Exception as exc:
             failed += 1
             operation_errors.append(f"{name}: {str(exc)[:200]}")
 
-    csv_keys = {item[0] for item in prepared}
-    for doc in existing_docs:
-        if doc.get("source_key") not in csv_keys and doc.get("active", True):
-            try:
-                await db.products.update_one(
-                    {"id": doc["id"]},
-                    {"$set": {"active": False, "inactive_reason": "removed_from_csv", "updated_at": now_iso()}},
-                )
-                deactivated += 1
-            except Exception as exc:
-                failed += 1
-                operation_errors.append(f"{doc.get('name', doc.get('id'))}: {str(exc)[:200]}")
-
     if operation_errors:
         await create_admin_notification(
             "CSV sync completed with errors",
-            f"Added {added}, updated {updated}, deactivated {deactivated}, failed {failed}.",
+            f"Added {added}, updated {updated}, hidden {hidden}, restored {restored}, failed {failed}.",
             details=operation_errors[:50],
         )
-    return {"added": added, "updated": updated, "deactivated": deactivated, "failed": failed, "errors": operation_errors[:50]}
+    return {"added": added, "updated": updated, "hidden": hidden, "restored": restored, "failed": failed, "errors": operation_errors[:50]}
 
 @api.post("/admin/catalog/refresh")
 async def admin_refresh_catalog(payload: CatalogRefreshIn, _=Depends(get_current_admin)):
