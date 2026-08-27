@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import api from '../../lib/api';
 import { inr } from '../../lib/utils';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog';
@@ -7,7 +7,7 @@ import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { Textarea } from '../../components/ui/textarea';
 import { useToast } from '../../hooks/use-toast';
-import { Plus, Pencil, Trash2, Percent, TrendingUp, TrendingDown, RefreshCw } from 'lucide-react';
+import { Plus, Pencil, Trash2, Percent, TrendingUp, TrendingDown, RefreshCw, Upload } from 'lucide-react';
 
 const empty = { 
   name: '', 
@@ -38,6 +38,37 @@ const AdminProducts = () => {
   const [percentage, setPercentage] = useState('');
   const [globalBusy, setGlobalBusy] = useState(false);
   const [syncBusy, setSyncBusy] = useState(false);
+  const [csvBusy, setCsvBusy] = useState(false);
+  const csvInputRef = useRef(null);
+
+  const syncCsv = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.csv')) {
+      return toast({ title: 'Invalid file', description: 'Select seethammadhara_products.csv.', variant: 'destructive' });
+    }
+    if (!confirm(`Synchronize the catalogue from ${file.name}? Rows removed from the CSV will be hidden from the website.`)) return;
+    setCsvBusy(true);
+    try {
+      const csv_text = await file.text();
+      const { data } = await api.post('/admin/catalog/sync-csv', { csv_text });
+      toast({
+        title: data.failed ? 'CSV sync completed with errors' : 'CSV sync completed',
+        description: `Added ${data.added}, updated ${data.updated}, deactivated ${data.deactivated}, failed ${data.failed}.`,
+        variant: data.failed ? 'destructive' : undefined,
+      });
+      window.dispatchEvent(new Event('admin-notifications-updated'));
+      load();
+    } catch (e) {
+      const detail = e.response?.data?.detail;
+      const message = typeof detail === 'string' ? detail : detail?.message || e.message || 'CSV sync failed';
+      toast({ title: 'CSV sync failed', description: message, variant: 'destructive' });
+      window.dispatchEvent(new Event('admin-notifications-updated'));
+    } finally {
+      setCsvBusy(false);
+    }
+  };
 
   const refreshReferences = async () => {
     setSyncBusy(true);
@@ -49,8 +80,12 @@ const AdminProducts = () => {
         title: 'Catalogue refreshed',
         description: `${applied.data.ready} products updated from Digi Rythu Bazaar${errors ? `; ${errors} could not be checked` : ''}.`
       });
+      window.dispatchEvent(new Event('admin-notifications-updated'));
       load();
-    } catch (e) { toast({ title: 'Refresh failed', description: e.response?.data?.detail || e.message, variant: 'destructive' }); }
+    } catch (e) {
+      toast({ title: 'Refresh failed', description: e.response?.data?.detail || e.message, variant: 'destructive' });
+      window.dispatchEvent(new Event('admin-notifications-updated'));
+    }
     finally { setSyncBusy(false); }
   };
 
@@ -164,7 +199,12 @@ const AdminProducts = () => {
     <div className="p-6 max-w-6xl mx-auto space-y-6">
       <div className="flex justify-between items-center">
         <h1 className="text-2xl font-bold tracking-tight">Manage Products</h1>
-        <div className="flex gap-2"><Button variant="outline" onClick={refreshReferences} disabled={syncBusy} className="gap-2"><RefreshCw className={`h-4 w-4 ${syncBusy?'animate-spin':''}`} /> Refresh Images & Vizag Prices</Button><Button onClick={openNew} className="gap-2 bg-emerald-600 hover:bg-emerald-700 text-white">
+        <div className="flex gap-2 flex-wrap justify-end">
+          <input ref={csvInputRef} type="file" accept=".csv,text/csv" onChange={syncCsv} className="hidden" />
+          <Button variant="outline" onClick={() => csvInputRef.current?.click()} disabled={csvBusy || syncBusy} className="gap-2">
+            <Upload className={`h-4 w-4 ${csvBusy?'animate-pulse':''}`} /> {csvBusy ? 'Synchronizing…' : 'Sync Products from CSV'}
+          </Button>
+          <Button variant="outline" onClick={refreshReferences} disabled={syncBusy || csvBusy} className="gap-2"><RefreshCw className={`h-4 w-4 ${syncBusy?'animate-spin':''}`} /> Refresh Images & Vizag Prices</Button><Button onClick={openNew} className="gap-2 bg-emerald-600 hover:bg-emerald-700 text-white">
           <Plus className="h-4 w-4" /> Add Product
         </Button></div>
       </div>

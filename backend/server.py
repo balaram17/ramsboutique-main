@@ -161,6 +161,9 @@ class ProductIn(BaseModel):
 class CatalogRefreshIn(BaseModel):
     apply: bool = False
 
+class CatalogCsvSyncIn(BaseModel):
+    csv_text: str = Field(min_length=1, max_length=5_000_000)
+
 
 class AgentIn(BaseModel):
     name: str
@@ -403,7 +406,10 @@ async def seed_db():
     # that an administrator has already edited.  source_key makes the import
     # idempotent, including rows where the source site exposes no product UUID.
     market_csv = ROOT_DIR / "seethammadhara_products.csv"
-    if market_csv.exists():
+    # The bundled CSV is only an initial bootstrap. Once a DRB catalogue exists,
+    # Admin CSV Sync is authoritative; Azure restarts must not recreate rows
+    # that an administrator has removed from a later CSV.
+    if market_csv.exists() and await db.products.count_documents({"source_market": "seethammadhara"}) == 0:
         category_map = {
             "groceries": ("grocery", "Grocery & Staples", "wheat"),
             "fruits": ("fruits-vegetables", "Fruits & Vegetables", "apple"),
@@ -935,7 +941,7 @@ async def list_products(
     q: Optional[str] = None,
     limit: int = Query(default=500, ge=1, le=1000),
 ):
-    query: dict = {}
+    query: dict = {"active": {"$ne": False}}
     if category:
         query["category"] = category
     if q:
@@ -1142,8 +1148,163 @@ async def admin_update_product(pid: str, p: ProductIn, _=Depends(get_current_adm
 
 @api.delete("/admin/products/{pid}")
 async def admin_delete_product(pid: str, _=Depends(get_current_admin)):
-    await db.products.delete_one({"id": pid})
+    product = await db.products.find_one({"id": pid})
+    if not product:
+        raise HTTPException(404, "Not found")
+    if product.get("source_market") == "seethammadhara":
+        await db.products.update_one(
+            {"id": pid},
+            {"$set": {"active": False, "inactive_reason": "admin_deleted", "updated_at": now_iso()}},
+        )
+    else:
+        await db.products.delete_one({"id": pid})
     return {"ok": True}
+
+async def create_admin_notification(title: str, message: str, level: str = "error", details=None):
+    doc = {
+        "id": str(uuid.uuid4()),
+        "title": title,
+        "message": message,
+        "level": level,
+        "details": details or [],
+        "read": False,
+        "created_at": now_iso(),
+    }
+    await db.admin_notifications.insert_one(doc)
+
+@api.get("/admin/notifications")
+async def admin_notifications(_=Depends(get_current_admin)):
+    docs = await db.admin_notifications.find().to_list(100)
+    docs.sort(key=lambda item: item.get("created_at", ""), reverse=True)
+    return [clean(doc) for doc in docs[:50]]
+
+@api.post("/admin/notifications/read-all")
+async def admin_notifications_read_all(_=Depends(get_current_admin)):
+    await db.admin_notifications.update_many({"read": {"$ne": True}}, {"$set": {"read": True}})
+    return {"ok": True}
+
+@api.post("/admin/catalog/sync-csv")
+async def admin_sync_catalog_csv(payload: CatalogCsvSyncIn, _=Depends(get_current_admin)):
+    required = {"product_id", "name", "category", "unit", "price", "mrp", "image_url", "source_url"}
+    try:
+        reader = csv.DictReader(payload.csv_text.lstrip("\ufeff").splitlines())
+        headers = set(reader.fieldnames or [])
+        missing = sorted(required - headers)
+        if missing:
+            raise ValueError("Missing CSV columns: " + ", ".join(missing))
+        rows = list(reader)
+    except Exception as exc:
+        await create_admin_notification("CSV sync failed", str(exc))
+        raise HTTPException(400, str(exc))
+
+    category_map = {
+        "groceries": ("grocery", "Grocery & Staples", "wheat"),
+        "fruits": ("fruits-vegetables", "Fruits & Vegetables", "apple"),
+        "vegetables": ("fruits-vegetables", "Fruits & Vegetables", "apple"),
+        "leafy green": ("fruits-vegetables", "Fruits & Vegetables", "apple"),
+        "flowers": ("flowers", "Flowers", "sparkles"),
+    }
+    prepared, validation_errors, seen = [], [], set()
+    for line_no, row in enumerate(rows, start=2):
+        try:
+            name = (row.get("name") or "").strip()
+            if not name:
+                raise ValueError("product name is blank")
+            raw_key = (row.get("product_id") or "").strip()
+            if not raw_key:
+                raw_key = hashlib.sha256(
+                    ((row.get("source_url") or "") + "|" + (row.get("image_url") or "")).encode("utf-8")
+                ).hexdigest()
+            if raw_key in seen:
+                raise ValueError("duplicate product_id/source key")
+            seen.add(raw_key)
+            price = float(row.get("price") or 0)
+            mrp = float(row.get("mrp") or price)
+            if price < 0 or mrp < price:
+                raise ValueError("price must be non-negative and MRP cannot be below price")
+            source_category = (row.get("category") or "Groceries").strip()
+            category, category_name, category_icon = category_map.get(
+                source_category.lower(), ("grocery", "Grocery & Staples", "wheat")
+            )
+            prepared.append((raw_key, row, name, price, mrp, source_category, category, category_name, category_icon))
+        except Exception as exc:
+            validation_errors.append(f"Row {line_no}: {exc}")
+
+    if validation_errors:
+        await create_admin_notification(
+            "CSV sync validation failed",
+            f"{len(validation_errors)} row(s) must be corrected. No products were changed.",
+            details=validation_errors[:50],
+        )
+        raise HTTPException(400, {"message": "CSV validation failed", "errors": validation_errors[:50]})
+
+    existing_docs = await db.products.find({"source_market": "seethammadhara"}).to_list(1000)
+    existing_by_key = {doc.get("source_key"): doc for doc in existing_docs}
+    added = updated = deactivated = failed = 0
+    operation_errors = []
+    for raw_key, row, name, price, mrp, source_category, category, category_name, category_icon in prepared:
+        try:
+            await db.categories.update_one(
+                {"id": category},
+                {"$setOnInsert": {"id": category, "slug": category, "name": category_name, "icon": category_icon, "order": 50}},
+                upsert=True,
+            )
+            values = {
+                "source_key": raw_key,
+                "source_product_id": (row.get("product_id") or "").strip(),
+                "source_market": "seethammadhara",
+                "name": name,
+                "name_te": (row.get("name_telugu") or "").strip(),
+                "name_hi": (row.get("name_hindi") or "").strip(),
+                "brand": "DRB",
+                "category": category,
+                "sub": source_category,
+                "price": price,
+                "mrp": mrp,
+                "unit": (row.get("unit") or "piece").strip(),
+                "image": (row.get("image_url") or "").strip(),
+                "desc": (row.get("description") or "").strip(),
+                "source_url": (row.get("source_url") or "").strip(),
+                "auto_update_price": True,
+                "auto_update_mrp": True,
+                "auto_update_image": True,
+                "active": True,
+                "inactive_reason": None,
+                "updated_at": now_iso(),
+            }
+            await db.products.update_one(
+                {"source_market": "seethammadhara", "source_key": raw_key},
+                {"$set": values, "$setOnInsert": {"id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"seethammadhara:{raw_key}")), "stock": 100, "variants": [], "created_at": now_iso()}},
+                upsert=True,
+            )
+            if raw_key in existing_by_key:
+                updated += 1
+            else:
+                added += 1
+        except Exception as exc:
+            failed += 1
+            operation_errors.append(f"{name}: {str(exc)[:200]}")
+
+    csv_keys = {item[0] for item in prepared}
+    for doc in existing_docs:
+        if doc.get("source_key") not in csv_keys and doc.get("active", True):
+            try:
+                await db.products.update_one(
+                    {"id": doc["id"]},
+                    {"$set": {"active": False, "inactive_reason": "removed_from_csv", "updated_at": now_iso()}},
+                )
+                deactivated += 1
+            except Exception as exc:
+                failed += 1
+                operation_errors.append(f"{doc.get('name', doc.get('id'))}: {str(exc)[:200]}")
+
+    if operation_errors:
+        await create_admin_notification(
+            "CSV sync completed with errors",
+            f"Added {added}, updated {updated}, deactivated {deactivated}, failed {failed}.",
+            details=operation_errors[:50],
+        )
+    return {"added": added, "updated": updated, "deactivated": deactivated, "failed": failed, "errors": operation_errors[:50]}
 
 @api.post("/admin/catalog/refresh")
 async def admin_refresh_catalog(payload: CatalogRefreshIn, _=Depends(get_current_admin)):
@@ -1159,6 +1320,13 @@ async def admin_refresh_catalog(payload: CatalogRefreshIn, _=Depends(get_current
                 await db.products.update_one({"id":p["id"]},{"$set":changes,"$push":{"price_history":{"at":checked["checked_at"],"old_price":p.get("price"),"old_mrp":p.get("mrp"),"new_price":changes.get("price"),"new_mrp":changes.get("mrp"),"source_url":p["source_url"]}}})
             results.append({"id":p["id"],"name":p["name"],"status":"ready","changes":changes})
         except Exception as e: results.append({"id":p["id"],"name":p["name"],"status":"error","error":str(e)[:300]})
+    errors = [f"{x['name']}: {x.get('error', 'Unknown error')}" for x in results if x["status"] == "error"]
+    if errors:
+        await create_admin_notification(
+            "Digi catalogue refresh errors",
+            f"{len(errors)} of {len(results)} products could not be refreshed.",
+            details=errors[:50],
+        )
     return {"applied":payload.apply,"checked":len(results),"ready":sum(x["status"]=="ready" for x in results),"results":results}
 
 
