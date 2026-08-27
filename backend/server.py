@@ -1,11 +1,14 @@
 """Ramsboutique Vizag Clone - FastAPI backend."""
 from email.mime import application
 from fastapi import FastAPI, APIRouter, HTTPException, status, Depends, Query
+from fastapi.responses import Response
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
+import asyncio
 import csv
+import io
 import hashlib
 import random
 import logging
@@ -29,6 +32,7 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 from chits import router as chits_router, seed_chit_data, start_chit_scheduler, stop_chit_scheduler
 from catalog_sync import inspect_source, proposed_update
+from dmart_sync import DMART_CATEGORIES, DMART_PINCODE, sync_categories
 
 mongo_url = os.environ["MONGO_URL"]
 client = AsyncIOMotorClient(mongo_url)
@@ -163,6 +167,12 @@ class CatalogRefreshIn(BaseModel):
 
 class CatalogCsvSyncIn(BaseModel):
     csv_text: str = Field(min_length=1, max_length=5_000_000)
+
+class DmartCategorySelectionIn(BaseModel):
+    tokens: List[str]
+
+class DmartSyncIn(BaseModel):
+    tokens: Optional[List[str]] = None
 
 class ProductVisibilityIn(BaseModel):
     active: bool
@@ -1236,6 +1246,139 @@ async def admin_notifications(_=Depends(get_current_admin)):
 async def admin_notifications_read_all(_=Depends(get_current_admin)):
     await db.admin_notifications.update_many({"read": {"$ne": True}}, {"$set": {"read": True}})
     return {"ok": True}
+
+
+# ============ DMART CATALOGUE ============
+@api.get("/admin/dmart/categories")
+async def admin_dmart_categories(_=Depends(get_current_admin)):
+    saved = await db.dmart_categories.find().to_list(100)
+    by_token = {item.get("token"): item for item in saved}
+    result = []
+    for token, name in DMART_CATEGORIES:
+        current = by_token.get(token, {})
+        category_products = await db.products.find(
+            {"source_market": "dmart", "source_category_token": token}, {"name": 1}
+        ).to_list(5000)
+        product_count = sum(
+            1 for product in category_products
+            if not str(product.get("name") or "").strip().casefold().startswith("dmart")
+        )
+        result.append({
+            "token": token, "name": name, "enabled": bool(current.get("enabled", False)),
+            "product_count": product_count, "total_records": current.get("total_records", 0),
+            "last_synced_at": current.get("last_synced_at"), "last_error": current.get("last_error"),
+        })
+    return {"pincode": DMART_PINCODE, "categories": result}
+
+
+@api.put("/admin/dmart/categories")
+async def admin_save_dmart_categories(payload: DmartCategorySelectionIn, _=Depends(get_current_admin)):
+    known = {token for token, _name in DMART_CATEGORIES}
+    selected = set(payload.tokens)
+    invalid = sorted(selected - known)
+    if invalid:
+        raise HTTPException(400, "Unknown DMart categories: " + ", ".join(invalid))
+    hidden = restored = 0
+    for token, name in DMART_CATEGORIES:
+        enabled = token in selected
+        await db.dmart_categories.update_one(
+            {"token": token},
+            {"$set": {"token": token, "name": name, "enabled": enabled, "updated_at": now_iso()}},
+            upsert=True,
+        )
+        if enabled:
+            result = await db.products.update_many(
+                {"source_market": "dmart", "source_category_token": token,
+                 "inactive_reason": "category_disabled"},
+                {"$set": {"active": True, "inactive_reason": None, "updated_at": now_iso()}},
+            )
+            restored += result.modified_count
+        else:
+            result = await db.products.update_many(
+                {"source_market": "dmart", "source_category_token": token, "active": {"$ne": False}},
+                {"$set": {"active": False, "inactive_reason": "category_disabled", "updated_at": now_iso()}},
+            )
+            hidden += result.modified_count
+    return {"selected": len(selected), "hidden": hidden, "restored": restored}
+
+
+async def run_dmart_job(job_id, tokens):
+    try:
+        await sync_categories(db, tokens, job_id, create_admin_notification)
+    except Exception as exc:
+        message = str(exc)[:500]
+        await db.dmart_sync_jobs.update_one(
+            {"id": job_id}, {"$set": {"status": "failed", "finished_at": now_iso(), "errors": [message]}},
+        )
+        await create_admin_notification("DMart catalogue sync failed", message)
+
+
+@api.post("/admin/dmart/sync")
+async def admin_start_dmart_sync(payload: DmartSyncIn, _=Depends(get_current_admin)):
+    if payload.tokens is None:
+        configured = await db.dmart_categories.find({"enabled": True}).to_list(100)
+        tokens = [item["token"] for item in configured]
+    else:
+        tokens = payload.tokens
+    known = {token for token, _name in DMART_CATEGORIES}
+    tokens = list(dict.fromkeys(tokens))
+    if not tokens:
+        raise HTTPException(400, "Select and save at least one DMart category first")
+    if set(tokens) - known:
+        raise HTTPException(400, "One or more selected DMart categories are invalid")
+    running = await db.dmart_sync_jobs.find_one({"status": {"$in": ["queued", "running"]}})
+    if running:
+        return {"job_id": running["id"], "status": running["status"], "already_running": True}
+    job_id = str(uuid.uuid4())
+    await db.dmart_sync_jobs.insert_one({
+        "id": job_id, "status": "queued", "tokens": tokens, "category_done": 0,
+        "category_total": len(tokens), "added": 0, "updated": 0, "hidden": 0,
+        "sku_count": 0, "errors": [], "created_at": now_iso(),
+    })
+    asyncio.create_task(run_dmart_job(job_id, tokens))
+    return {"job_id": job_id, "status": "queued", "already_running": False}
+
+
+@api.get("/admin/dmart/sync/{job_id}")
+async def admin_dmart_sync_status(job_id: str, _=Depends(get_current_admin)):
+    job = await db.dmart_sync_jobs.find_one({"id": job_id})
+    if not job:
+        raise HTTPException(404, "DMart sync job not found")
+    return clean(job)
+
+
+@api.get("/admin/dmart/export.csv")
+async def admin_export_dmart_csv(_=Depends(get_current_admin)):
+    docs = await db.products.find({"source_market": "dmart"}).to_list(50000)
+    docs = [doc for doc in docs if not str(doc.get("name") or "").strip().casefold().startswith("dmart")]
+    docs.sort(key=lambda item: (item.get("source_category_l1", ""), item.get("name", "")))
+    columns = [
+        "source_category_token", "source_category_l1", "source_category_l2", "source_category_l3",
+        "source_product_id", "source_sku_id", "name", "brand", "unit", "mrp", "price",
+        "image_url", "source_url", "active", "inactive_reason", "source_pincode", "last_synced_at",
+    ]
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=columns)
+    writer.writeheader()
+    for doc in docs:
+        writer.writerow({
+            "source_category_token": doc.get("source_category_token", ""),
+            "source_category_l1": doc.get("source_category_l1", ""),
+            "source_category_l2": doc.get("source_category_l2", ""),
+            "source_category_l3": doc.get("source_category_l3", ""),
+            "source_product_id": doc.get("source_product_id", ""),
+            "source_sku_id": doc.get("source_sku_id", ""),
+            "name": doc.get("name", ""), "brand": doc.get("brand", ""), "unit": doc.get("unit", ""),
+            "mrp": doc.get("mrp", 0), "price": doc.get("mrp", 0),
+            "image_url": doc.get("image", ""), "source_url": doc.get("source_url", ""),
+            "active": doc.get("active", True), "inactive_reason": doc.get("inactive_reason") or "",
+            "source_pincode": doc.get("source_pincode", DMART_PINCODE),
+            "last_synced_at": doc.get("source_checked_at", ""),
+        })
+    return Response(
+        content="\ufeff" + output.getvalue(), media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename=dmart-live-products.csv"},
+    )
 
 @api.post("/admin/catalog/sync-csv")
 async def admin_sync_catalog_csv(payload: CatalogCsvSyncIn, _=Depends(get_current_admin)):
