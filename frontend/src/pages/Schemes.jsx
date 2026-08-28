@@ -33,7 +33,7 @@ export default function Schemes() {
       </button>)}</div>
       <div className="kit-preview">
         <div><Package/><div><h2>Your {duration}-month entitlement</h2><p>Full 12-month quantity ÷ 12 × {duration}</p></div></div>
-        <button onClick={() => setOpen(!open)}>View 40 Items List {open ? <ChevronUp/> : <ChevronDown/>}</button>
+        <button onClick={() => setOpen(!open)}>View Items List {open ? <ChevronUp/> : <ChevronDown/>}</button>
         {open && <div className="kit-table"><div className="kit-row kit-head"><span>Item</span><span>Full kit</span><span>Your quantity</span></div>
           {kit.map(i => <div className="kit-row" key={i.id}><span>{i.name}<small>{i.name_te}</small></span><span>{i.full_qty} {i.unit}</span><b>{i.final_qty} {i.unit}</b></div>)}</div>}
       </div>
