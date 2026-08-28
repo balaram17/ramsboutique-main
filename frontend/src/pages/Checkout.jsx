@@ -25,6 +25,8 @@ const Checkout = () => {
   const delivery = subtotal >= 499 ? 0 : deliveryCharge;
   const total = subtotal + delivery;
   const [payment, setPayment] = useState('COD');
+  const [walletBalance, setWalletBalance] = useState(0);
+  const [useWallet, setUseWallet] = useState(true);
   const [placing, setPlacing] = useState(false);
   const [note, setNote] = useState('');
   const [addr, setAddr] = useState({
@@ -47,6 +49,9 @@ const Checkout = () => {
       if (Number.isFinite(Number(data.delivery_charge_rupees))) setDeliveryCharge(Number(data.delivery_charge_rupees));
     }).catch(() => {});
   }, []);
+  React.useEffect(() => {
+    if (user) api.get('/wallet').then(({ data }) => setWalletBalance(Number(data.balance_rupees || 0))).catch(() => {});
+  }, [user]);
 
   const setF = (k, v) => setAddr((p) => ({ ...p, [k]: v }));
 
@@ -68,10 +73,11 @@ const Checkout = () => {
         payment_method: payment,
         note,
         coupon_code: appliedCoupon?.code || null,
+        use_wallet: useWallet,
       };
       const { data } = await api.post('/orders', payload);
       
-      if (payment === 'UPI' || payment === 'CARD') {
+      if ((payment === 'UPI' || payment === 'CARD') && Number(data.total) > 0) {
         try {
           await openRazorpayCheckout({
             orderId: data.id,
@@ -166,7 +172,9 @@ const Checkout = () => {
             <div className="flex justify-between text-amber-800"><span>Coupon ({appliedCoupon.code})</span><span>-{inr(discount)}</span></div>
           )}
           <div className="flex justify-between"><span>Delivery</span><span>{delivery === 0 ? 'FREE' : inr(delivery)}</span></div>
-          <div className="flex justify-between font-bold text-base border-t pt-2"><span>Total</span><span>{inr(Math.max(0, subtotal + delivery - discount))}</span></div>
+          {walletBalance > 0 && <label className="flex justify-between items-center gap-3 bg-emerald-50 border border-emerald-200 rounded p-2"><span><b>Store Wallet</b><small className="block text-emerald-700">Available {inr(walletBalance)}</small></span><input type="checkbox" checked={useWallet} onChange={e=>setUseWallet(e.target.checked)}/></label>}
+          {useWallet&&walletBalance>0&&<div className="flex justify-between text-emerald-700"><span>Wallet applied</span><span>-{inr(Math.min(walletBalance,Math.max(0,subtotal+delivery-discount)))}</span></div>}
+          <div className="flex justify-between font-bold text-base border-t pt-2"><span>Total</span><span>{inr(Math.max(0, subtotal + delivery - discount - (useWallet?walletBalance:0)))}</span></div>
         </div>
         <Button onClick={place} disabled={placing || !store.open} className="w-full mt-4 bg-[#f7941d] hover:bg-[#e58500] gap-2">
           {placing ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}

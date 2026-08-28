@@ -25,6 +25,7 @@ from fastapi.responses import StreamingResponse
 from motor.motor_asyncio import AsyncIOMotorClient
 from openpyxl import Workbook
 from pydantic import BaseModel, Field, field_validator
+from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from auth_utils import get_current_admin, get_current_user
@@ -38,6 +39,12 @@ IST = timezone(timedelta(hours=5, minutes=30))
 MONTHLY_PAISE = 50_000
 DEFAULT_PACKING_PAISE = 5_000
 ALLOWED_DURATIONS = (1, 3, 6, 12)
+
+DEFAULT_VOUCHER_REWARDS = [
+    {"id": "cash_500", "name": "₹500 Reward", "type": "cash", "amount_paise": 50_000, "active": True},
+    {"id": "rice_5kg", "name": "5 KG Rice Bag", "type": "grocery", "item_name": "Rice Bag", "qty": 5, "unit": "kg", "active": True},
+    {"id": "oil_3l", "name": "3 L Oil", "type": "grocery", "item_name": "Refined Oil", "qty": 3, "unit": "L", "active": True},
+]
 
 rzp = None
 if os.getenv("RAZORPAY_KEY_ID") and os.getenv("RAZORPAY_KEY_SECRET"):
@@ -166,6 +173,29 @@ class ItemIn(BaseModel):
 class ChitItemsCsvIn(BaseModel):
     csv_text: str = Field(min_length=1, max_length=2_000_000)
 
+class VoucherRewardIn(BaseModel):
+    id: str = Field(min_length=2, max_length=50, pattern=r"^[a-z0-9_-]+$")
+    name: str = Field(min_length=2, max_length=100)
+    type: Literal["cash", "grocery"]
+    amount_paise: int = Field(default=0, ge=0, le=1_000_000)
+    item_name: str = Field(default="", max_length=100)
+    qty: float = Field(default=0, ge=0, le=1000)
+    unit: str = Field(default="", max_length=20)
+    active: bool = True
+
+class VoucherRewardsIn(BaseModel):
+    rewards: List[VoucherRewardIn] = Field(min_length=1, max_length=20)
+
+class VoucherAssignIn(BaseModel):
+    reward_id: str
+
+class VoucherCashChoiceIn(BaseModel):
+    choice: Literal["wallet", "razorpay_refund"]
+
+class VoucherRefundDecisionIn(BaseModel):
+    approve: bool
+    reason: str = Field(default="", max_length=500)
+
 class ChitRefreshIn(BaseModel):
     apply: bool = False
 
@@ -194,6 +224,10 @@ async def seed_chit_data():
     await db.chit_settings.update_one(
         {"id": "chit_settings", "delivery_charge_paise": {"$exists": False}},
         {"$set": {"delivery_charge_paise": 4_000}},
+    )
+    await db.chit_settings.update_one(
+        {"id": "chit_settings", "voucher_rewards": {"$exists": False}},
+        {"$set": {"voucher_rewards": DEFAULT_VOUCHER_REWARDS}},
     )
     if await db.chit_plan_items.count_documents({}) == 0:
         await db.chit_plan_items.insert_many([{
@@ -362,6 +396,18 @@ async def record_payment(sub, payment_id, amount, status="paid", event_id=None):
     await db.chit_subscriptions.update_one({"id": sub["id"]}, {"$set": {
         "paid_count": new_count, "status": new_status,
         "next_due_date": None if new_status == "ready_for_delivery" else next_tenth(), "updated_at": now()}})
+    if sub.get("chosen_duration") == 12 and new_count >= 12:
+        if sub.get("voucher"):
+            await db.chit_subscriptions.update_one(
+                {"id": sub["id"], "voucher.state": "assigned"},
+                {"$set": {"voucher.state": "available_to_scratch", "voucher.available_at": now(), "updated_at": now()}},
+            )
+        else:
+            await db.admin_notifications.insert_one({
+                "id": str(uuid.uuid4()), "title": "12-month voucher assignment required",
+                "message": f"{sub['card_no']} completed the final payment without an assigned scratch voucher.",
+                "level": "warning", "details": [], "read": False, "created_at": now(),
+            })
     if new_status != "pending_admin_approval":
         await send_whatsapp(sub["phone"], "payment_success" if new_status != "ready_for_delivery" else "ready", sub)
     return True
@@ -451,10 +497,90 @@ async def my_chit_legacy(phone: str, current=Depends(get_current_user)):
     return await my_chit_payload(current["user_id"])
 
 
+@router.post("/voucher/scratch")
+async def scratch_voucher(current=Depends(get_current_user)):
+    sub = await db.chit_subscriptions.find_one({"user_id": current["user_id"]}, sort=[("created_at", -1)])
+    if not sub or sub.get("chosen_duration") != 12:
+        raise HTTPException(404, "A scratch voucher is available only for 12-month subscriptions")
+    if sub.get("paid_count", 0) < 12:
+        raise HTTPException(409, "Complete the final instalment to unlock your scratch voucher")
+    voucher = sub.get("voucher") or {}
+    if voucher.get("state") != "available_to_scratch":
+        if not voucher: raise HTTPException(409, "Admin has not assigned your voucher yet")
+        raise HTTPException(409, "This voucher has already been scratched or processed")
+    reward = voucher.get("reward_snapshot") or {}
+    revealed_at = now()
+    if reward.get("type") == "grocery":
+        bonus = {"id": f"voucher-{sub['id']}", "name": reward.get("item_name") or reward.get("name"),
+                 "name_te": "", "final_qty": float(reward.get("qty") or 0), "unit": reward.get("unit") or "piece",
+                 "price": 0, "mrp": 0, "voucher_bonus": True}
+        updated = await db.chit_subscriptions.find_one_and_update(
+            {"id": sub["id"], "voucher.state": "available_to_scratch"},
+            {"$set": {"voucher.state": "fulfilled", "voucher.revealed_at": revealed_at,
+                      "voucher.fulfilled_at": revealed_at, "updated_at": revealed_at},
+             "$push": {"kit_snapshot": bonus}},
+            return_document=ReturnDocument.AFTER,
+        )
+    else:
+        updated = await db.chit_subscriptions.find_one_and_update(
+            {"id": sub["id"], "voucher.state": "available_to_scratch"},
+            {"$set": {"voucher.state": "cash_choice_required", "voucher.revealed_at": revealed_at, "updated_at": revealed_at}},
+            return_document=ReturnDocument.AFTER,
+        )
+    if not updated: raise HTTPException(409, "Voucher state changed; refresh your chit card")
+    return {"ok": True, "voucher": public(updated).get("voucher"),
+            "message": "Voucher revealed once and permanently recorded"}
+
+
+@router.post("/voucher/cash-choice")
+async def voucher_cash_choice(payload: VoucherCashChoiceIn, current=Depends(get_current_user)):
+    sub = await db.chit_subscriptions.find_one({"user_id": current["user_id"]}, sort=[("created_at", -1)])
+    if not sub or sub.get("voucher", {}).get("state") != "cash_choice_required":
+        raise HTTPException(409, "Cash reward is not awaiting your choice")
+    reward = sub["voucher"].get("reward_snapshot") or {}
+    amount = int(reward.get("amount_paise") or 0)
+    if reward.get("type") != "cash" or amount <= 0: raise HTTPException(409, "Assigned voucher is not a cash reward")
+    if payload.choice == "wallet":
+        credit_id = f"chit-voucher:{sub['id']}"
+        await db.users.update_one(
+            {"id": current["user_id"], "wallet_credit_ids": {"$ne": credit_id}},
+            {"$inc": {"wallet_balance_paise": amount}, "$push": {"wallet_credit_ids": credit_id},
+             "$set": {"wallet_updated_at": now()}},
+        )
+        await db.wallet_transactions.update_one(
+            {"id": credit_id}, {"$setOnInsert": {"id": credit_id, "user_id": current["user_id"],
+             "type": "credit", "amount_paise": amount, "source": "12_month_chit_voucher",
+             "subscription_id": sub["id"], "created_at": now()}}, upsert=True,
+        )
+        await db.chit_subscriptions.update_one(
+            {"id": sub["id"], "voucher.state": "cash_choice_required"},
+            {"$set": {"voucher.state": "fulfilled", "voucher.cash_choice": "wallet",
+                      "voucher.fulfilled_at": now(), "updated_at": now()}},
+        )
+        return {"ok": True, "choice": "wallet", "amount_paise": amount,
+                "message": f"₹{amount / 100:g} added to your Rams Boutique wallet"}
+    await db.chit_subscriptions.update_one(
+        {"id": sub["id"], "voucher.state": "cash_choice_required"},
+        {"$set": {"voucher.state": "refund_pending_admin", "voucher.cash_choice": "razorpay_refund",
+                  "voucher.refund_requested_at": now(), "updated_at": now()}},
+    )
+    await db.admin_notifications.insert_one({
+        "id": str(uuid.uuid4()), "title": "Scratch-voucher refund approval required",
+        "message": f"{sub['card_no']} requested a ₹{amount / 100:g} Razorpay refund.",
+        "level": "warning", "details": [], "read": False, "created_at": now(),
+    })
+    return {"ok": True, "choice": "razorpay_refund",
+            "message": "Razorpay refund request submitted for Admin approval"}
+
+
 @router.post("/book-slot")
 async def create_slot_payment(payload: SlotIn, current=Depends(get_current_user)):
     sub = await db.chit_subscriptions.find_one({"id": payload.subscription_id, "user_id": current["user_id"]})
     if not sub or sub["status"] != "ready_for_delivery": raise HTTPException(409, "Complete all instalments before booking delivery")
+    if sub.get("chosen_duration") == 12:
+        voucher_state = (sub.get("voucher") or {}).get("state")
+        if voucher_state in (None, "assigned", "available_to_scratch", "cash_choice_required"):
+            raise HTTPException(409, "Reveal and process your 12-month scratch voucher before booking delivery")
     delivery = datetime.fromisoformat(payload.delivery_date).date()
     if delivery < datetime.now(IST).date(): raise HTTPException(400, "Choose a future delivery date")
     charge_paise = await packing_charge_paise()
@@ -689,6 +815,97 @@ async def admin_update_settings(payload: ChitSettingsIn, admin=Depends(get_curre
 async def admin_plans(_=Depends(get_current_admin)):
     docs = await db.chit_plans.find({}).sort("duration", 1).to_list(10)
     return [public(x) for x in docs]
+
+
+@router.get("/admin/voucher-rewards")
+async def admin_voucher_rewards(_=Depends(get_current_admin)):
+    settings = await db.chit_settings.find_one({"id": "chit_settings"})
+    return {"rewards": (settings or {}).get("voucher_rewards", DEFAULT_VOUCHER_REWARDS)}
+
+
+@router.put("/admin/voucher-rewards")
+async def admin_update_voucher_rewards(payload: VoucherRewardsIn, admin=Depends(get_current_admin)):
+    rewards = [reward.model_dump() for reward in payload.rewards]
+    ids = [reward["id"] for reward in rewards]
+    if len(ids) != len(set(ids)): raise HTTPException(400, "Voucher reward IDs must be unique")
+    for reward in rewards:
+        if reward["type"] == "cash" and reward["amount_paise"] <= 0:
+            raise HTTPException(400, f"{reward['name']}: cash amount must be positive")
+        if reward["type"] == "grocery" and (reward["qty"] <= 0 or not reward["item_name"] or not reward["unit"]):
+            raise HTTPException(400, f"{reward['name']}: grocery item, quantity and unit are required")
+    await db.chit_settings.update_one(
+        {"id": "chit_settings"}, {"$set": {"voucher_rewards": rewards, "voucher_rewards_updated_at": now(),
+                                               "voucher_rewards_updated_by": admin["user_id"]}}, upsert=True,
+    )
+    return {"ok": True, "rewards": rewards,
+            "message": "Reward catalogue updated. Existing voucher assignments are unchanged."}
+
+
+@router.put("/admin/{subscription_id}/voucher-assignment")
+async def admin_assign_voucher(subscription_id: str, payload: VoucherAssignIn, admin=Depends(get_current_admin)):
+    sub = await db.chit_subscriptions.find_one({"id": subscription_id})
+    if not sub: raise HTTPException(404, "Subscription not found")
+    if sub.get("chosen_duration") != 12: raise HTTPException(409, "Scratch vouchers apply only to 12-month subscriptions")
+    current_state = (sub.get("voucher") or {}).get("state")
+    if current_state and current_state not in ("assigned", "available_to_scratch"):
+        raise HTTPException(409, "A revealed or processed voucher cannot be reassigned")
+    settings = await db.chit_settings.find_one({"id": "chit_settings"})
+    reward = next((item for item in (settings or {}).get("voucher_rewards", DEFAULT_VOUCHER_REWARDS)
+                   if item.get("id") == payload.reward_id and item.get("active", True)), None)
+    if not reward: raise HTTPException(404, "Active voucher reward not found")
+    state = "available_to_scratch" if sub.get("paid_count", 0) >= 12 else "assigned"
+    voucher = {"reward_id": reward["id"], "reward_snapshot": reward, "state": state,
+               "assigned_at": now(), "assigned_by": admin["user_id"]}
+    if state == "available_to_scratch": voucher["available_at"] = now()
+    await db.chit_subscriptions.update_one({"id": subscription_id}, {"$set": {"voucher": voucher, "updated_at": now()}})
+    return {"ok": True, "voucher": public(voucher),
+            "message": f"{reward['name']} preassigned to {sub['card_no']}"}
+
+
+@router.post("/admin/{subscription_id}/voucher-refund-decision")
+async def admin_voucher_refund_decision(subscription_id: str, payload: VoucherRefundDecisionIn, admin=Depends(get_current_admin)):
+    sub = await db.chit_subscriptions.find_one({"id": subscription_id})
+    if not sub or sub.get("voucher", {}).get("state") != "refund_pending_admin":
+        raise HTTPException(409, "No voucher refund is awaiting approval")
+    if not payload.approve:
+        await db.chit_subscriptions.update_one(
+            {"id": subscription_id, "voucher.state": "refund_pending_admin"},
+            {"$set": {"voucher.state": "cash_choice_required", "voucher.refund_rejected_at": now(),
+                      "voucher.refund_rejected_by": admin["user_id"], "voucher.refund_rejection_reason": payload.reason,
+                      "updated_at": now()}},
+        )
+        return {"ok": True, "message": "Refund request rejected; customer can select wallet credit"}
+    if not rzp: raise HTTPException(503, "Razorpay is not configured")
+    reward_amount = int(sub["voucher"].get("reward_snapshot", {}).get("amount_paise") or 0)
+    payment = await db.chit_payments.find_one(
+        {"subscription_id": subscription_id, "status": "paid"}, sort=[("payment_no", -1)]
+    )
+    if not payment or not payment.get("razorpay_payment_id"):
+        raise HTTPException(409, "Final Razorpay payment record is unavailable")
+    if int(payment.get("amount_paise") or 0) < reward_amount:
+        raise HTTPException(409, "Final payment is below the voucher amount; reject this request so the customer can choose wallet credit")
+    locked = await db.chit_subscriptions.update_one(
+        {"id": subscription_id, "voucher.state": "refund_pending_admin"},
+        {"$set": {"voucher.state": "refund_processing", "voucher.refund_approved_at": now(),
+                  "voucher.refund_approved_by": admin["user_id"], "updated_at": now()}},
+    )
+    if not locked.modified_count: raise HTTPException(409, "Refund is already being processed")
+    try:
+        refund = rzp.payment.refund(payment["razorpay_payment_id"], {
+            "amount": reward_amount, "notes": {"subscription_id": subscription_id, "purpose": "12_month_scratch_voucher"}
+        })
+    except Exception as exc:
+        await db.chit_subscriptions.update_one(
+            {"id": subscription_id, "voucher.state": "refund_processing"},
+            {"$set": {"voucher.state": "refund_pending_admin", "voucher.refund_error": str(exc)[:500], "updated_at": now()}},
+        )
+        raise HTTPException(502, f"Razorpay refund failed: {exc}")
+    await db.chit_subscriptions.update_one(
+        {"id": subscription_id, "voucher.state": "refund_processing"},
+        {"$set": {"voucher.state": "fulfilled", "voucher.fulfilled_at": now(),
+                  "voucher.razorpay_refund_id": refund.get("id"), "voucher.refund_error": None, "updated_at": now()}},
+    )
+    return {"ok": True, "message": f"₹{reward_amount / 100:g} Razorpay refund submitted successfully", "refund_id": refund.get("id")}
 
 
 @router.put("/admin/plans/{duration}/price")

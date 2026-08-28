@@ -130,6 +130,7 @@ class CheckoutIn(BaseModel):
     payment_method: str  # "COD" | "UPI" | "CARD"
     note: Optional[str] = ""
     coupon_code: Optional[str] = None
+    use_wallet: bool = True
 
 
 class OrderStatusUpdate(BaseModel):
@@ -679,7 +680,20 @@ async def me(current=Depends(get_current_user)):
     user = await db.users.find_one({"id": current["user_id"]})
     if not user:
         raise HTTPException(404, "User not found")
-    return {"id": user["id"], "name": user["name"], "email": user["email"], "phone": user["phone"], "role": user["role"]}
+    wallet_paise = int(user.get("wallet_balance_paise", 0))
+    return {"id": user["id"], "name": user["name"], "email": user["email"], "phone": user["phone"], "role": user["role"],
+            "wallet_balance_paise": wallet_paise, "wallet_balance_rupees": wallet_paise / 100}
+
+
+@api.get("/wallet")
+async def my_wallet(current=Depends(get_current_user)):
+    user = await db.users.find_one({"id": current["user_id"]})
+    if not user: raise HTTPException(404, "User not found")
+    balance = int(user.get("wallet_balance_paise", 0))
+    transactions = await db.wallet_transactions.find({"user_id": current["user_id"]}).to_list(100)
+    transactions.sort(key=lambda item: item.get("created_at", ""), reverse=True)
+    return {"balance_paise": balance, "balance_rupees": balance / 100,
+            "transactions": [clean(item) for item in transactions[:50]]}
 
 
 @api.patch("/auth/me")
@@ -1063,28 +1077,61 @@ async def create_order(data: CheckoutIn, current=Depends(get_current_user)):
     configured_delivery_fee = int((settings or {}).get("delivery_charge_paise", 4_000)) / 100
     delivery_fee = 0 if subtotal >= 499 else configured_delivery_fee
     discount, coupon_doc = await resolve_coupon(data.coupon_code, subtotal)
-    total = max(0, subtotal + delivery_fee - discount)
+    gross_total = max(0, subtotal + delivery_fee - discount)
+    order_id = str(uuid.uuid4())
+    wallet_applied_paise = 0
+    wallet_debit_id = f"order:{order_id}"
+    if data.use_wallet and gross_total > 0:
+        wallet_user = await db.users.find_one({"id": current["user_id"]}, {"wallet_balance_paise": 1})
+        available = max(0, int((wallet_user or {}).get("wallet_balance_paise", 0)))
+        wallet_applied_paise = min(available, int(round(gross_total * 100)))
+        if wallet_applied_paise:
+            debited = await db.users.update_one(
+                {"id": current["user_id"], "wallet_balance_paise": {"$gte": wallet_applied_paise},
+                 "wallet_debit_ids": {"$ne": wallet_debit_id}},
+                {"$inc": {"wallet_balance_paise": -wallet_applied_paise}, "$push": {"wallet_debit_ids": wallet_debit_id},
+                 "$set": {"wallet_updated_at": now_iso()}},
+            )
+            if not debited.modified_count: wallet_applied_paise = 0
+    total = max(0, gross_total - wallet_applied_paise / 100)
 
     order = {
-        "id": str(uuid.uuid4()),
+        "id": order_id,
         "order_no": f"RB{datetime.now().strftime('%y%m%d')}{str(uuid.uuid4())[:6].upper()}",
         "user_id": current["user_id"],
         "items": items_full,
         "subtotal": round(subtotal, 2),
         "delivery_fee": delivery_fee,
         "discount": round(discount, 2),
+        "wallet_applied_paise": wallet_applied_paise,
+        "wallet_applied": wallet_applied_paise / 100,
+        "wallet_debit_id": wallet_debit_id if wallet_applied_paise else None,
         "coupon_code": coupon_doc["code"] if coupon_doc else None,
         "total": round(total, 2), # 👈 This is the absolute field Razorpay reads!
         "address": data.address.dict(),
         "note": (data.note or "").strip()[:500],
         "payment_method": data.payment_method,
-        "payment_status": "pending",
+        "payment_status": "paid" if total == 0 else "pending",
         "status": "placed",
         "agent_id": None,
         "created_at": now_iso(),
         "distance_km": round(dist, 2),
     }
-    await db.orders.insert_one(order)
+    try:
+        await db.orders.insert_one(order)
+        if wallet_applied_paise:
+            await db.wallet_transactions.update_one(
+                {"id": wallet_debit_id}, {"$setOnInsert": {"id": wallet_debit_id, "user_id": current["user_id"],
+                 "type": "debit", "amount_paise": wallet_applied_paise, "source": "order",
+                 "order_id": order_id, "created_at": now_iso()}}, upsert=True,
+            )
+    except Exception:
+        if wallet_applied_paise:
+            await db.users.update_one(
+                {"id": current["user_id"], "wallet_debit_ids": wallet_debit_id},
+                {"$inc": {"wallet_balance_paise": wallet_applied_paise}, "$pull": {"wallet_debit_ids": wallet_debit_id}},
+            )
+        raise
     return clean(order)
 
 
@@ -1108,14 +1155,32 @@ async def get_order(oid: str, current=Depends(get_current_user)):
 async def cancel_my_unpaid_order(oid: str, current=Depends(get_current_user)):
     order = await db.orders.find_one({"id": oid, "user_id": current["user_id"]})
     if not order: raise HTTPException(404, "Order not found")
-    if order.get("payment_status") == "paid":
+    if order.get("payment_status") == "paid" and not order.get("wallet_applied_paise"):
         raise HTTPException(409, "Paid orders cannot be self-cancelled. Please contact customer support.")
     if order.get("status") != "placed":
         raise HTTPException(409, f"Order cannot be cancelled after it is {order.get('status', 'processed')}")
     result = await db.orders.delete_one(
-        {"id": oid, "user_id": current["user_id"], "status": "placed", "payment_status": {"$ne": "paid"}},
+        {"id": oid, "user_id": current["user_id"], "status": "placed", "$or": [
+            {"payment_status": {"$ne": "paid"}},
+            {"payment_status": "paid", "total": 0, "wallet_applied_paise": {"$gt": 0}},
+        ]},
     )
     if not result.deleted_count: raise HTTPException(409, "Order status changed; refresh and try again")
+    wallet_paise = int(order.get("wallet_applied_paise") or 0)
+    debit_id = order.get("wallet_debit_id")
+    if wallet_paise and debit_id:
+        restored = await db.users.update_one(
+            {"id": current["user_id"], "wallet_debit_ids": debit_id,
+             "wallet_restore_ids": {"$ne": debit_id}},
+            {"$inc": {"wallet_balance_paise": wallet_paise}, "$pull": {"wallet_debit_ids": debit_id},
+             "$push": {"wallet_restore_ids": debit_id}, "$set": {"wallet_updated_at": now_iso()}},
+        )
+        if restored.modified_count:
+            await db.wallet_transactions.update_one(
+                {"id": f"restore:{debit_id}"}, {"$setOnInsert": {"id": f"restore:{debit_id}",
+                 "user_id": current["user_id"], "type": "credit", "amount_paise": wallet_paise,
+                 "source": "cancelled_order", "order_id": oid, "created_at": now_iso()}}, upsert=True,
+            )
     return {"ok": True, "deleted": True, "order_id": oid}
 
 
