@@ -6,6 +6,8 @@ chit_payments, chit_delivery_slots. Monetary values are stored in paise.
 import hashlib
 import hmac
 import io
+import csv
+import asyncio
 import logging
 import os
 import random
@@ -153,6 +155,16 @@ class ItemIn(BaseModel):
     source_url: str = ""
     auto_update_mrp: bool = False
     auto_update_image: bool = True
+    included_durations: List[Literal[1, 3, 6, 12]] = Field(default_factory=lambda: [1, 3, 6, 12])
+
+    @field_validator("included_durations")
+    @classmethod
+    def durations_ok(cls, values):
+        values = sorted(set(values))
+        return values
+
+class ChitItemsCsvIn(BaseModel):
+    csv_text: str = Field(min_length=1, max_length=2_000_000)
 
 class ChitRefreshIn(BaseModel):
     apply: bool = False
@@ -188,6 +200,10 @@ async def seed_chit_data():
             "id": str(uuid.uuid4()), "sort_order": n, "name": en, "name_te": te,
             "full_qty": float(qty), "unit": unit, "active": True, "created_at": now()
         } for n, en, te, qty, unit in MASTER_ITEMS])
+    await db.chit_plan_items.update_many(
+        {"included_durations": {"$exists": False}},
+        {"$set": {"included_durations": list(ALLOWED_DURATIONS)}},
+    )
     for duration, title in ((1, "Trial"), (3, "Quarterly"), (6, "Half Yearly"), (12, "Yearly / Full Kit")):
         await db.chit_plans.update_one({"duration": duration}, {"$setOnInsert": {
             "id": str(uuid.uuid4()), "duration": duration, "title": title,
@@ -201,11 +217,22 @@ async def seed_chit_data():
         "status": {"$in": ["active", "pending_payment"]},
         "razorpay_order_id": {"$exists": False}, "razorpay_subscription_id": {"$exists": False},
     }, {"$set": {"status": "approved_awaiting_payment", "payment_setup_status": "not_created", "next_due_date": None}})
+    # Freeze the current entitlement for legacy subscriptions once. Future
+    # master-list imports must not alter an already accepted customer kit.
+    legacy = await db.chit_subscriptions.find({"kit_snapshot": {"$exists": False}}).to_list(5000)
+    for subscription in legacy:
+        duration = int(subscription.get("chosen_duration") or 0)
+        if duration in ALLOWED_DURATIONS:
+            await db.chit_subscriptions.update_one(
+                {"id": subscription["id"], "kit_snapshot": {"$exists": False}},
+                {"$set": {"kit_snapshot": await kit_for(duration), "kit_snapshot_created_at": now()}},
+            )
 
 
 async def kit_for(duration: int):
     items = await db.chit_plan_items.find({"active": True}).sort("sort_order", 1).to_list(100)
-    return [{**public(x), "final_qty": calculated_qty(x["full_qty"], duration)} for x in items]
+    included = [x for x in items if duration in x.get("included_durations", ALLOWED_DURATIONS)]
+    return [{**public(x), "final_qty": calculated_qty(x["full_qty"], duration)} for x in included]
 
 
 async def packing_charge_paise():
@@ -247,10 +274,11 @@ async def public_settings():
 async def calculate(payload: CalculateIn):
     plan = await active_plan(payload.duration)
     monthly_paise = int(plan.get("monthly_amount_paise", MONTHLY_PAISE))
+    kit_snapshot = await kit_for(payload.duration)
     return {"duration": payload.duration, "monthly_amount": monthly_paise / 100,
             "monthly_amount_paise": monthly_paise,
             "total_payable": monthly_paise * payload.duration / 100,
-            "formula": "full_qty / 12 × duration", "items": await kit_for(payload.duration)}
+            "formula": "full_qty / 12 × duration", "items": kit_snapshot}
 
 
 async def new_card_no():
@@ -268,11 +296,13 @@ async def subscribe(payload: SubscribeIn, current=Depends(get_current_user)):
     if active: raise HTTPException(409, "You already have an active chit subscription")
     plan = await active_plan(payload.duration)
     monthly_paise = int(plan.get("monthly_amount_paise", MONTHLY_PAISE))
+    kit_snapshot = await kit_for(payload.duration)
     sid, card = str(uuid.uuid4()), await new_card_no()
     doc = {"id": sid, "card_no": card, "user_id": current["user_id"], "name": payload.name,
            "phone": payload.phone, "address": payload.address, "city": payload.city,
            "chosen_duration": payload.duration, "plan_id": plan["id"], "paid_count": 0,
            "monthly_amount_paise": monthly_paise,
+           "kit_snapshot": kit_snapshot,
            "total_paise": monthly_paise * payload.duration, "next_due_date": None,
            "status": "pending_admin_approval", "approval_status": "pending",
            "payment_setup_status": "not_created", "terms_accepted_at": now(), "created_at": now()}
@@ -401,7 +431,7 @@ async def my_chit_payload(user_id: str):
     slot = await db.chit_delivery_slots.find_one({"subscription_id": sub["id"]})
     charge_paise = await packing_charge_paise()
     return {"subscription": public(sub), "payments": [public(x) for x in payments],
-            "kit": await kit_for(sub["chosen_duration"]), "slot": public(slot),
+            "kit": sub.get("kit_snapshot") or await kit_for(sub["chosen_duration"]), "slot": public(slot),
             "packing_charge_paise": charge_paise, "packing_charge_rupees": charge_paise / 100}
 
 
@@ -461,7 +491,7 @@ async def finalize_delivery_slot(sub, payload, payment_id: str, payment_method: 
     if await db.chit_delivery_slots.find_one({"subscription_id": sub["id"]}): raise HTTPException(409, "Delivery slot already booked")
     charge_paise = int(sub.get("packing_charge_quote_paise") or await packing_charge_paise())
     charge_rupees = charge_paise / 100
-    kit = await kit_for(sub["chosen_duration"]); order_id = str(uuid.uuid4())
+    kit = sub.get("kit_snapshot") or await kit_for(sub["chosen_duration"]); order_id = str(uuid.uuid4())
     slot = {"id": str(uuid.uuid4()), "subscription_id": sub["id"], "delivery_date": payload.delivery_date,
             "time_slot": payload.time_slot, "packing_charge_paise": charge_paise,
             "razorpay_payment_id": payment_id, "order_id": order_id, "booked_at": now()}
@@ -510,6 +540,129 @@ async def admin_list(status: Optional[str] = None, search: str = "", _=Depends(g
 @router.get("/admin/items")
 async def admin_items(_=Depends(get_current_admin)):
     return [public(x) for x in await db.chit_plan_items.find({}).sort("sort_order", 1).to_list(40)]
+
+
+@router.get("/admin/items/export.csv")
+async def admin_export_items_csv(_=Depends(get_current_admin)):
+    items = await db.chit_plan_items.find({}).sort("sort_order", 1).to_list(40)
+    columns = ["item_id", "sort_order", "name", "name_te", "full_qty", "unit", "image_url", "mrp",
+               "source_url", "active", "include_1m", "include_3m", "include_6m", "include_12m",
+               "auto_update_mrp", "auto_update_image"]
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=columns)
+    writer.writeheader()
+    for item in items:
+        durations = item.get("included_durations", ALLOWED_DURATIONS)
+        writer.writerow({
+            "item_id": item.get("id", ""), "sort_order": item.get("sort_order", ""),
+            "name": item.get("name", ""), "name_te": item.get("name_te", ""),
+            "full_qty": item.get("full_qty", ""), "unit": item.get("unit", ""),
+            "image_url": item.get("image", ""), "mrp": item.get("mrp", 0),
+            "source_url": item.get("source_url", ""), "active": str(item.get("active", True)).lower(),
+            "include_1m": str(1 in durations).lower(), "include_3m": str(3 in durations).lower(),
+            "include_6m": str(6 in durations).lower(), "include_12m": str(12 in durations).lower(),
+            "auto_update_mrp": str(item.get("auto_update_mrp", False)).lower(),
+            "auto_update_image": str(item.get("auto_update_image", True)).lower(),
+        })
+    data = ("\ufeff" + output.getvalue()).encode("utf-8")
+    return StreamingResponse(
+        io.BytesIO(data), media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename=chit-master-40-items.csv"},
+    )
+
+
+@router.post("/admin/items/import-csv")
+async def admin_import_items_csv(payload: ChitItemsCsvIn, admin=Depends(get_current_admin)):
+    required = {"item_id", "sort_order", "name", "name_te", "full_qty", "unit", "image_url", "mrp",
+                "source_url", "active", "include_1m", "include_3m", "include_6m", "include_12m",
+                "auto_update_mrp", "auto_update_image"}
+    truthy, falsy = {"true", "1", "yes", "active", "include"}, {"false", "0", "no", "inactive", "exclude"}
+    def boolean(value, column):
+        text = str(value or "").strip().lower()
+        if text in truthy: return True
+        if text in falsy: return False
+        raise ValueError(f"{column} must be true or false")
+
+    try:
+        reader = csv.DictReader(payload.csv_text.lstrip("\ufeff").splitlines())
+        missing = sorted(required - set(reader.fieldnames or []))
+        if missing: raise ValueError("Missing CSV columns: " + ", ".join(missing))
+        rows = list(reader)
+    except Exception as exc:
+        raise HTTPException(400, str(exc))
+    if len(rows) != 40:
+        raise HTTPException(400, f"The master CSV must contain exactly 40 item rows; received {len(rows)}")
+
+    existing_count = await db.chit_plan_items.count_documents({})
+    if existing_count != 40:
+        raise HTTPException(409, f"Database master list must contain exactly 40 items; found {existing_count}")
+    existing = await db.chit_plan_items.find({}).to_list(40)
+    existing_ids = {str(item.get("id")) for item in existing}
+    prepared, errors, seen_ids, seen_orders = [], [], set(), set()
+    for line_no, row in enumerate(rows, start=2):
+        try:
+            item_id = str(row.get("item_id") or "").strip()
+            if item_id not in existing_ids: raise ValueError("item_id does not match the current master list")
+            if item_id in seen_ids: raise ValueError("duplicate item_id")
+            seen_ids.add(item_id)
+            sort_order = int(row.get("sort_order") or 0)
+            if sort_order < 1 or sort_order > 40 or sort_order in seen_orders:
+                raise ValueError("sort_order must be unique from 1 through 40")
+            seen_orders.add(sort_order)
+            name, unit = str(row.get("name") or "").strip(), str(row.get("unit") or "").strip()
+            if not name or not unit: raise ValueError("name and unit are required")
+            full_qty, mrp = float(row.get("full_qty") or 0), float(row.get("mrp") or 0)
+            if full_qty <= 0 or mrp < 0: raise ValueError("full_qty must be positive and MRP cannot be negative")
+            durations = [duration for duration in ALLOWED_DURATIONS if boolean(row.get(f"include_{duration}m"), f"include_{duration}m")]
+            values = {
+                "sort_order": sort_order, "name": name, "name_te": str(row.get("name_te") or "").strip(),
+                "full_qty": full_qty, "unit": unit, "image": str(row.get("image_url") or "").strip(),
+                "mrp": mrp, "source_url": str(row.get("source_url") or "").strip(),
+                "active": boolean(row.get("active"), "active"), "included_durations": durations,
+                "auto_update_mrp": boolean(row.get("auto_update_mrp"), "auto_update_mrp"),
+                "auto_update_image": boolean(row.get("auto_update_image"), "auto_update_image"),
+                "updated_at": now(), "updated_by": admin["user_id"],
+            }
+            prepared.append((item_id, values))
+        except Exception as exc:
+            errors.append(f"Row {line_no}: {exc}")
+    if seen_ids != existing_ids:
+        errors.append("CSV item IDs must match all 40 current master items exactly")
+    if errors:
+        await db.admin_notifications.insert_one({
+            "id": str(uuid.uuid4()), "title": "Chit master CSV validation failed",
+            "message": f"{len(errors)} CSV validation error(s). No master items were changed.",
+            "level": "error", "details": errors[:50], "read": False, "created_at": now(),
+        })
+        raise HTTPException(400, {"message": "Master-kit CSV validation failed", "errors": errors[:50]})
+
+    async def cosmos_write(item_id, values):
+        for attempt in range(1, 8):
+            try:
+                return await db.chit_plan_items.update_one({"id": item_id}, {"$set": values})
+            except Exception as exc:
+                throttled = getattr(exc, "code", None) == 16500 or "16500" in str(exc)
+                if not throttled or attempt == 7: raise
+                await asyncio.sleep(attempt * 0.35)
+
+    updated, failed, operation_errors = 0, 0, []
+    for item_id, values in prepared:
+        try:
+            result = await cosmos_write(item_id, values)
+            updated += result.modified_count
+            await asyncio.sleep(0.05)
+        except Exception as exc:
+            failed += 1
+            operation_errors.append(f"{values['name']}: {str(exc)[:250]}")
+    if operation_errors:
+        await db.admin_notifications.insert_one({
+            "id": str(uuid.uuid4()), "title": "Chit master CSV import errors",
+            "message": f"{failed} of 40 master items could not be updated.", "level": "error",
+            "details": operation_errors[:50], "read": False, "created_at": now(),
+        })
+    return {"ok": failed == 0, "validated": 40, "updated": updated, "failed": failed,
+            "errors": operation_errors[:50],
+            "message": "Master kit and plan exclusions processed. Existing subscription snapshots are unchanged."}
 
 
 @router.get("/admin/settings")
