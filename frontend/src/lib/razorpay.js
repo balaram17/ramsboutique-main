@@ -33,7 +33,7 @@ export const openRazorpayCheckout = async ({ orderId, name, phone, email }) => {
       key: rzpOrder.key_id,
       amount: rzpOrder.amount,
       currency: rzpOrder.currency,
-      name: 'Rams Boutique',
+      name: 'BTA FreshMart',
       description: `Order ${rzpOrder.order_no}`,
       order_id: rzpOrder.razorpay_order_id,
       prefill: {

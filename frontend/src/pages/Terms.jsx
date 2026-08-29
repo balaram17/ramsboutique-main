@@ -12,7 +12,7 @@ const Terms = () => (
         <p className="mb-8 text-sm text-gray-500">Last updated: August 13, 2026</p>
 
         <Section title="1. Introduction">
-          Welcome to Rams Boutique. By accessing or using our website, placing an order, or using our services, you agree to these Terms & Conditions. If you do not agree, please do not use the website.
+          Welcome to BTA FreshMart. By accessing or using our website, placing an order, or using our services, you agree to these Terms & Conditions. If you do not agree, please do not use the website.
         </Section>
         <Section title="2. Products and Information">
           We make reasonable efforts to ensure that product descriptions, images, prices, availability and other information are accurate. Product appearance may vary slightly from images shown online. We reserve the right to correct errors and update product information at any time.
@@ -36,10 +36,10 @@ const Terms = () => (
           You agree not to misuse the website, interfere with its operation, attempt unauthorized access, introduce malicious code, or use the website for unlawful purposes.
         </Section>
         <Section title="9. Intellectual Property">
-          Website content, branding, logos, graphics, text and other materials belonging to Rams Boutique may not be copied, reproduced, modified or distributed without permission, except where permitted by law.
+          Website content, branding, logos, graphics, text and other materials belonging to BTA FreshMart may not be copied, reproduced, modified or distributed without permission, except where permitted by law.
         </Section>
         <Section title="10. Limitation of Liability">
-          To the extent permitted by applicable law, Rams Boutique will not be responsible for indirect or consequential losses arising from website use, delays, service interruptions, or circumstances outside our reasonable control.
+          To the extent permitted by applicable law, BTA FreshMart will not be responsible for indirect or consequential losses arising from website use, delays, service interruptions, or circumstances outside our reasonable control.
         </Section>
         <Section title="11. Changes">
           We may update these Terms & Conditions from time to time. Updated terms will be published on this page. Continued use of the website after changes are published constitutes acceptance of the updated terms.

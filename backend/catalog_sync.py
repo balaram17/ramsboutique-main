@@ -1,5 +1,5 @@
 """Safe schema.org based catalogue reference checks."""
-import html, json, re
+import html, json, os, re
 from datetime import datetime, timezone
 from urllib.parse import parse_qs, unquote_plus, urljoin, urlparse
 import httpx
@@ -22,8 +22,10 @@ async def inspect_source(url):
     if not safe_url(url): raise ValueError("Only public http/https source URLs are allowed")
     parsed=urlparse(url)
     is_digi=(parsed.hostname or "").lower() in {"digirythubazaarap.com","www.digirythubazaarap.com"}
-    cookies={"NearestRbId":"b823b231-653f-4554-9aba-ae22f6725a20","NearestRbDistance":"0"} if is_digi else None
-    async with httpx.AsyncClient(timeout=15,follow_redirects=True,cookies=cookies,headers={"User-Agent":"RamsBoutique-CatalogCheck/1.0"}) as c:
+    rb_id=os.environ.get("DIGI_NEAREST_RB_ID", "").strip()
+    rb_distance=os.environ.get("DIGI_NEAREST_RB_DISTANCE", "").strip()
+    cookies={"NearestRbId":rb_id,"NearestRbDistance":rb_distance} if is_digi and rb_id and rb_distance else None
+    async with httpx.AsyncClient(timeout=15,follow_redirects=True,cookies=cookies,headers={"User-Agent":"BTAFreshMart-CatalogCheck/1.0"}) as c:
         r=await c.get(url); r.raise_for_status()
         if len(r.content)>2_000_000: raise ValueError("Source page is too large")
     if is_digi:

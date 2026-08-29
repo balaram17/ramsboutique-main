@@ -1,4 +1,4 @@
-"""Monthly Grocery Saving Scheme (Chit) module for Rams Boutique.
+"""Monthly Grocery Saving Scheme (Chit) module for BTA FreshMart.
 
 MongoDB collections: chit_plans, chit_plan_items, chit_subscriptions,
 chit_payments, chit_delivery_slots. Monetary values are stored in paise.
@@ -362,7 +362,7 @@ async def start_payment(payload: MockPaymentIn, current=Depends(get_current_user
             gateway = {"razorpay_order_id": entity["id"]}
         else:
             plan = rzp.plan.create({"period": "monthly", "interval": 1, "item": {
-                "name": f"Rams Boutique {sub['chosen_duration']}-Month Grocery Chit",
+                "name": f"BTA FreshMart {sub['chosen_duration']}-Month Grocery Chit",
                 "amount": monthly_paise, "currency": "INR"}, "notes": {"duration": str(sub["chosen_duration"])}})
             # Immediate start makes Checkout collect the first configured term after approval.
             entity = rzp.subscription.create({"plan_id": plan["id"], "total_count": sub["chosen_duration"],
@@ -558,7 +558,7 @@ async def voucher_cash_choice(payload: VoucherCashChoiceIn, current=Depends(get_
                       "voucher.fulfilled_at": now(), "updated_at": now()}},
         )
         return {"ok": True, "choice": "wallet", "amount_paise": amount,
-                "message": f"₹{amount / 100:g} added to your Rams Boutique wallet"}
+                "message": f"₹{amount / 100:g} added to your BTA FreshMart wallet"}
     await db.chit_subscriptions.update_one(
         {"id": sub["id"], "voucher.state": "cash_choice_required"},
         {"$set": {"voucher.state": "refund_pending_admin", "voucher.cash_choice": "razorpay_refund",

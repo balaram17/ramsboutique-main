@@ -161,9 +161,8 @@ const doAgentLogin = async (e) => {
     <div className="min-h-[80vh] flex items-center justify-center px-4 py-10 bg-gray-50">
       <div className="w-full max-w-md bg-white rounded-lg border shadow-sm p-6">
         <div className="text-center mb-5">
-          <div className="inline-flex flex-col items-center gap-2 mb-3">
-            <img src="/rb-logo.png" alt="Rams Boutique" className="h-16 w-16 object-contain" />
-            <div className="font-serif font-bold text-[#6b3410] text-lg">Rams Boutique</div>
+          <div className="inline-flex flex-col items-center mb-3">
+            <img src="/rb-logo.png" alt="BTA FreshMart" className="h-28 w-auto max-w-[280px] object-contain" />
           </div>
           <h1 className="text-xl font-bold">{l.welcome}</h1>
           <p className="text-sm text-gray-500">{l.subheading}</p>

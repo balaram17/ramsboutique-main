@@ -39,7 +39,7 @@ const ReturnsRefunds = () => (
           Send your order number, registered contact details, the issue description and supporting photographs (if applicable) to <a className="font-medium underline" href="mailto:info@ramsboutique.com">info@ramsboutique.com</a>.
         </Section>
         <Section title="10. Policy Updates">
-          We may update this policy from time to time. The version displayed on this page is the current version published by Rams Boutique.
+          We may update this policy from time to time. The version displayed on this page is the current version published by BTA FreshMart.
         </Section>
 
         <div className="mt-8 rounded-xl bg-gray-50 p-4 text-sm text-gray-600">

@@ -19,7 +19,7 @@ export default function Schemes() {
   const totalRupees = (selectedPlan?.total_paise || 0) / 100;
   return <div className="scheme-page">
     <section className="scheme-hero">
-      <span className="scheme-pill">Rams Boutique Grocery Savings</span>
+      <span className="scheme-pill">BTA FreshMart Grocery Savings</span>
       <h1>Save monthly. Receive your complete grocery kit once.</h1>
       <p>మీ ప్లాన్ మొత్తాన్ని నెలవారీగా చెల్లించండి • చివరి వాయిదా తర్వాత కిరాణా కిట్ పొందండి</p>
     </section>

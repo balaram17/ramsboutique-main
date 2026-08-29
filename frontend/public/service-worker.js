@@ -1,4 +1,4 @@
-/* Rams Boutique - PWA service worker */
+/* BTA FreshMart - PWA service worker */
 const CACHE_NAME = 'rb-v1';
 const APP_SHELL = [
   '/',
@@ -65,7 +65,7 @@ self.addEventListener('fetch', (event) => {
 
 // ---------- Web Push notifications ----------
 self.addEventListener('push', (event) => {
-  let data = { title: 'Rams Boutique', body: 'You have a new update.', url: '/' };
+  let data = { title: 'BTA FreshMart', body: 'You have a new update.', url: '/' };
   try { if (event.data) data = { ...data, ...event.data.json() }; } catch (_) {}
   event.waitUntil(
     self.registration.showNotification(data.title, {

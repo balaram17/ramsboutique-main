@@ -47,12 +47,8 @@ const Navbar = () => {
       <header className="bg-white border-b border-gray-200 sticky top-0 z-40 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center gap-4">
           {/* Logo */}
-          <Link to="/" className="flex items-center gap-2 shrink-0">
-            <img src="/rb-logo.png" alt="Rams Boutique" className="h-11 w-11 object-contain rounded-full bg-white" />
-            <div className="hidden sm:block leading-tight">
-              <div className="font-serif font-bold text-[#6b3410] text-lg tracking-wide">Rams Boutique</div>
-              <div className="text-[10px] text-[#c9a24c] font-semibold uppercase tracking-widest">Vizag</div>
-            </div>
+          <Link to="/" className="flex items-center shrink-0" aria-label="BTA FreshMart home">
+            <img src="/rb-logo.png" alt="BTA FreshMart" className="h-12 sm:h-14 w-auto max-w-[150px] sm:max-w-[180px] object-contain" />
           </Link>
 
           {/* Location */}

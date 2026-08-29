@@ -90,5 +90,5 @@ PRODUCTS = [
 BANNERS = [
     {"title": "Fresh Groceries at Best Prices", "subtitle": "Home delivery in Visakhapatnam within 60 mins", "image": "https://images.unsplash.com/photo-1542838132-92c53300491e?w=1400", "cta": "Shop Now", "link": "/c/grocery"},
     {"title": "Farm-Fresh Fruits & Vegetables", "subtitle": "Handpicked daily, delivered fresh", "image": "https://images.unsplash.com/photo-1610348725531-843dff563e2c?w=1400", "cta": "Order Now", "link": "/c/fruits-vegetables"},
-    {"title": "Daily Essentials, Everyday Low Prices", "subtitle": "Rams Boutique quality, home comfort", "image": "https://images.unsplash.com/photo-1583258292688-d0213dc5a3a8?w=1400", "cta": "Explore", "link": "/c/dairy"},
+    {"title": "Daily Essentials, Everyday Low Prices", "subtitle": "BTA FreshMart quality, home comfort", "image": "https://images.unsplash.com/photo-1583258292688-d0213dc5a3a8?w=1400", "cta": "Explore", "link": "/c/dairy"},
 ]
