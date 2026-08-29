@@ -92,7 +92,7 @@ async def sync_categories(db, tokens, job_id, notify):
         )
     total_added = total_updated = total_hidden = total_skus = 0
     errors = []
-    headers = {"User-Agent": "RamsBoutique-CatalogSync/1.0", "Accept": "application/json"}
+    headers = {"User-Agent": "BTAFreshMart-CatalogSync/1.0", "Accept": "application/json"}
     async with httpx.AsyncClient(timeout=30, follow_redirects=True, headers=headers) as client:
         for category_index, token in enumerate(tokens, start=1):
             category_name = known[token]
@@ -124,7 +124,7 @@ async def sync_categories(db, tokens, job_id, notify):
                             if not sku_id:
                                 continue
                             product_name = str(sku.get("name") or product.get("name") or "").strip()
-                            # Rams Boutique must not list DMart's own-label items.
+                            # BTA FreshMart must not list DMart's own-label items.
                             if product_name.casefold().startswith("dmart"):
                                 continue
                             try:

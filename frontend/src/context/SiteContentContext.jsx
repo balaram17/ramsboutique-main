@@ -6,7 +6,7 @@ const SiteContentContext = createContext(null);
 const DEFAULTS = {
   top_strip: 'Free delivery on orders above ₹499 • Serving Visakhapatnam within 5 km of Dwaraka Nagar',
   hero: {
-    pill: 'Rams Boutique Vizag',
+    pill: 'BTA FreshMart Vizag',
     title: 'Everyday Low Prices, delivered to your doorstep',
     subtitle: 'Groceries, staples, dairy, personal care and more – fresh in Visakhapatnam within 60 minutes.',
     cta1_text: 'Shop Groceries', cta1_link: '/c/grocery',
@@ -16,7 +16,7 @@ const DEFAULTS = {
   login: {
     welcome: 'Welcome',
     subheading: 'Login or sign up to continue',
-    footer: 'By continuing you agree to Rams Boutique Terms of Service and Privacy Policy.',
+    footer: 'By continuing you agree to BTA FreshMart Terms of Service and Privacy Policy.',
   },
   footer: {
     description: 'Everyday low prices delivered fresh across Visakhapatnam within 5 km of our Dwaraka Nagar store.',
@@ -25,7 +25,7 @@ const DEFAULTS = {
     phone: '1800-123-4567',
     email: 'support@ramsboutique.com',
     facebook: '', instagram: '', twitter: '', youtube: '',
-    copyright: '© 2025 Rams Boutique. All rights reserved.',
+    copyright: '© 2025 BTA FreshMart. All rights reserved.',
   },
 };
 

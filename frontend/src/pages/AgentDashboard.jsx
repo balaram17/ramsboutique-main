@@ -107,11 +107,11 @@ const AgentDashboard = () => {
           <div className="flex items-center gap-3">
             <img
               src="/rb-logo.png"
-              alt="Rams Boutique"
-              className="h-10 w-10 object-contain"
+              alt="BTA FreshMart"
+              className="h-14 w-auto max-w-[180px] object-contain"
             />
             <div>
-              <div className="font-bold text-[#6b3410]">Rams Boutique</div>
+              <div className="font-bold text-[#6b3410]">BTA FreshMart</div>
               <div className="text-xs text-gray-500">Delivery Agent Partner Portal</div>
             </div>
           </div>

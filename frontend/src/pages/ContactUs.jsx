@@ -48,7 +48,7 @@ const ContactUs = () => {
                   className="mt-4 inline-block rounded-lg bg-black px-4 py-2 text-white"
                   href="mailto:info@ramsboutique.com"
                 >
-                  Email Rams Boutique
+                  Email BTA FreshMart
                 </a>
               </div>
             ) : (

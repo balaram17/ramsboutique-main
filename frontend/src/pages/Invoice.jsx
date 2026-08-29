@@ -105,11 +105,11 @@ const Invoice = () => {
           <div className="flex items-center gap-3">
             <img 
               src={DEFAULT_LOGO_PATH} 
-              alt="Rams Boutique Logo" 
+              alt="BTA FreshMart Logo"
               className="h-12 w-auto object-contain error-fallback"
               onError={(e) => { e.target.style.display = 'none'; }}
             />
-            <div className="font-serif font-bold text-[#6b3410] text-lg">Rams Boutique</div>
+            <div className="font-serif font-bold text-[#6b3410] text-lg">BTA FreshMart</div>
           </div>
           <div className="text-left sm:text-right space-y-1">
             <h2 className="text-xl font-bold text-gray-900 tracking-tight uppercase">Invoice</h2>
@@ -125,7 +125,7 @@ const Invoice = () => {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-8 py-8 text-sm">
           <div>
             <h3 className="font-bold text-gray-400 uppercase tracking-wider text-xs mb-2">From:</h3>
-            <p className="font-semibold text-gray-900">Rams Boutique</p>
+            <p className="font-semibold text-gray-900">BTA FreshMart</p>
             <p className="text-gray-600 mt-0.5">48-18-64, Tulasipeta Street</p>
             <p className="text-gray-600">Dwaraka Nagar, Visakhapatnam, AP 530016</p>
             <p className="text-blue-600 hover:underline text-xs mt-1">info@ramsboutique.com</p>
@@ -193,7 +193,7 @@ const Invoice = () => {
         {/* INVOICE REGULATORY LEGAL COMPLIANCE FOOTER SIGNATURE NOTE */}
         <div className="mt-12 pt-6 border-t border-gray-100 text-center">
           <p className="text-xs text-gray-400 italic">
-            Thank you for shopping at Rams Boutique! This is a computer-generated invoice for a paid transaction. Taxes shown are inclusive of items values.
+            Thank you for shopping at BTA FreshMart! This is a computer-generated invoice for a paid transaction. Taxes shown are inclusive of items values.
           </p>
         </div>
 

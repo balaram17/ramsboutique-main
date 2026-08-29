@@ -39,21 +39,14 @@ const Footer = () => {
         {/* BRAND */}
         <div className="col-span-2 md:col-span-1">
 
-          <div className="flex items-center gap-3 mb-4">
+          <div className="mb-4">
             <img
               src="/rb-logo.png"
-              alt="Rams Boutique"
-              className="h-14 w-14 object-contain rounded-full bg-white p-0.5"
+              alt="BTA FreshMart"
+              className="h-24 w-auto max-w-full object-contain object-left"
             />
-
-            <div className="leading-tight">
-              <div className="font-serif font-bold text-white text-lg">
-                Rams Boutique
-              </div>
-
-              <div className="text-[10px] text-[#c9a24c] font-semibold uppercase tracking-widest">
-                {f.tagline}
-              </div>
+            <div className="mt-2 text-[10px] text-[#c9a24c] font-semibold uppercase tracking-widest">
+              {f.tagline}
             </div>
           </div>
 

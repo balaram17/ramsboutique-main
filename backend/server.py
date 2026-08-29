@@ -1,4 +1,4 @@
-"""Ramsboutique Vizag Clone - FastAPI backend."""
+"""BTA FreshMart Vizag Clone - FastAPI backend."""
 from email.mime import application
 from fastapi import FastAPI, APIRouter, HTTPException, status, Depends, Query
 from fastapi.responses import Response
@@ -39,7 +39,7 @@ mongo_url = os.environ["MONGO_URL"]
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ["DB_NAME"]]
 
-app = FastAPI(title="Rams Boutique Vizag API")
+app = FastAPI(title="BTA FreshMart Vizag API")
 api = APIRouter(prefix="/api")
 origins = [
     "http://localhost:3000",
@@ -62,7 +62,7 @@ STORE_LAT = 17.7231
 STORE_LNG = 83.3012
 DELIVERY_RADIUS_KM = 5.0
 
-BLACKSMS_API_KEY = os.environ.get("BLACKSMS_API_KEY", "7704d6856e9ca0885ef6b1cb7df3cbb4")
+BLACKSMS_API_KEY = os.environ.get("BLACKSMS_API_KEY", "").strip()
 
 # Razorpay
 RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID", "")
@@ -256,7 +256,7 @@ DEFAULT_STORE_HOURS = {
 DEFAULT_SITE_CONTENT = {
     "top_strip": "Free delivery on orders above ₹499 • Serving Visakhapatnam within 5 km of Dwaraka Nagar",
     "hero": {
-        "pill": "Rams Boutique Vizag",
+        "pill": "BTA FreshMart Vizag",
         "title": "Everyday Low Prices, delivered to your doorstep",
         "subtitle": "Groceries, staples, dairy, personal care and more – fresh in Visakhapatnam within 60 minutes.",
         "cta1_text": "Shop Groceries",
@@ -268,7 +268,7 @@ DEFAULT_SITE_CONTENT = {
     "login": {
         "welcome": "Welcome",
         "subheading": "Login or sign up to continue",
-        "footer": "By continuing you agree to Rams Boutique Terms of Service and Privacy Policy.",
+        "footer": "By continuing you agree to BTA FreshMart Terms of Service and Privacy Policy.",
     },
     "footer": {
         "description": "Everyday low prices delivered fresh across Visakhapatnam within 5 km of our Dwaraka Nagar store.",
@@ -280,7 +280,7 @@ DEFAULT_SITE_CONTENT = {
         "instagram": "https://instagram.com/ramsboutique",
         "twitter": "https://twitter.com/ramsboutique",
         "youtube": "https://youtube.com/ramsboutique",
-        "copyright": "© 2026 Rams Boutique. All rights reserved.",
+        "copyright": "© 2026 BTA FreshMart. All rights reserved.",
     },
     "store_hours": DEFAULT_STORE_HOURS,
 }
@@ -335,8 +335,8 @@ def is_store_open(hours: dict):
 
 
 # ============ Push notifications helper ============
-_vapid_private = os.environ.get("VAPID_PRIVATE_KEY", "kI7cIn9-gA_eGAgT4Wf8PyPfCaW1qscTf7cxxaOEtKM")
-_vapid_public = os.environ.get("VAPID_PUBLIC_KEY", "BL3tGDHxqhsxGqhgQJC7EcdWyC5GG0GqdcOGMwbZCQB-4XEp6KXD8D7uRMqSYZILjCtYpNRnndaYdVgC1Bw_-mQ")
+_vapid_private = os.environ.get("VAPID_PRIVATE_KEY", "").strip()
+_vapid_public = os.environ.get("VAPID_PUBLIC_KEY", "").strip()
 _vapid_claim = os.environ.get("VAPID_CLAIM_EMAIL", "mailto:info@ramsboutique.com")
 
 
@@ -510,19 +510,22 @@ async def seed_db():
         for b in BANNERS:
             await db.banners.insert_one({"id": str(uuid.uuid4()), **b})
 
-    # Default admin
-    if not await db.users.find_one({"email": "admin@ramsboutique.com"}):
+    # Seed an administrator only when a deployment explicitly provides a
+    # password. Existing administrator records are left untouched.
+    default_admin_email = os.environ.get("DEFAULT_ADMIN_EMAIL", "admin@ramsboutique.com").strip()
+    default_admin_password = os.environ.get("DEFAULT_ADMIN_PASSWORD", "")
+    if default_admin_password and not await db.users.find_one({"email": default_admin_email}):
         await db.users.delete_many({"role": "admin"})
         await db.users.insert_one({
             "id": str(uuid.uuid4()),
             "name": "Admin",
-            "email": "admin@ramsboutique.com",
+            "email": default_admin_email,
             "phone": "9999999999",
-            "password": hash_password("admin123"),
+            "password": hash_password(default_admin_password),
             "role": "admin",
             "created_at": now_iso(),
         })
-        logging.info("Seeded default admin: admin@ramsboutique.com / admin123")
+        logging.info("Seeded configured default administrator")
 
     # Sample delivery agents
     if await db.agents.count_documents({}) == 0:
@@ -533,6 +536,43 @@ async def seed_db():
     if not await db.site_content.find_one({"id": "site"}):
         await db.site_content.insert_one({"id": "site", **DEFAULT_SITE_CONTENT, "updated_at": now_iso()})
         logging.info("Seeded default site content")
+
+    # Migrate persisted customer-facing branding without overwriting unrelated
+    # content that an administrator may have customized.
+    rebrand_migration = "bta_freshmart_rebrand_v1"
+    if not await db.app_migrations.find_one({"id": rebrand_migration}):
+        replacements = (
+            ("hero.pill", "Rams Boutique Vizag", "BTA FreshMart Vizag"),
+            (
+                "login.footer",
+                "By continuing you agree to Rams Boutique Terms of Service and Privacy Policy.",
+                "By continuing you agree to BTA FreshMart Terms of Service and Privacy Policy.",
+            ),
+            (
+                "footer.copyright",
+                "© 2026 Rams Boutique. All rights reserved.",
+                "© 2026 BTA FreshMart. All rights reserved.",
+            ),
+            (
+                "footer.copyright",
+                "© 2025 Rams Boutique. All rights reserved.",
+                "© 2026 BTA FreshMart. All rights reserved.",
+            ),
+        )
+        for field, old_value, new_value in replacements:
+            await db.site_content.update_one(
+                {"id": "site", field: old_value},
+                {"$set": {field: new_value, "updated_at": now_iso()}},
+            )
+        await db.banners.update_many(
+            {"subtitle": "Rams Boutique quality, home comfort"},
+            {"$set": {"subtitle": "BTA FreshMart quality, home comfort"}},
+        )
+        await db.app_migrations.insert_one({
+            "id": rebrand_migration,
+            "applied_at": now_iso(),
+        })
+        logging.info("Migrated persisted branding to BTA FreshMart")
 
 
 # ============ AUTH ============
@@ -901,7 +941,7 @@ async def rzp_create_order(data: RazorpayCreateIn, current=Depends(get_current_u
                 "internal_order_id": order["id"],
                 "user_id": current["user_id"],
                 "total_charged": str(order["total"]),
-                "store": "Rams Boutique Vizag",
+                "store": "BTA FreshMart Vizag",
             },
         })
     except Exception as e:
@@ -951,7 +991,7 @@ async def rzp_verify(data: RazorpayVerifyIn, current=Depends(get_current_user)):
     try:
         await push_to_user(
             current["user_id"],
-            f"Rams Boutique • Payment received",
+            f"BTA FreshMart • Payment received",
             f"Payment of ₹{int(doc['total'])} confirmed for order {doc['order_no']}.",
             url="/orders",
         )
@@ -1235,7 +1275,7 @@ async def admin_update_order(oid: str, data: OrderStatusUpdate, _=Depends(get_cu
         }.get(data.status, f"Order status updated to {data.status}")
         await push_to_user(
             doc["user_id"],
-            f"Rams Boutique • Order {doc['order_no']}",
+            f"BTA FreshMart • Order {doc['order_no']}",
             status_msg,
             url=f"/orders",
         )
@@ -1386,7 +1426,7 @@ async def admin_dmart_export_script(tokens: str = "", _=Depends(get_current_admi
     if set(selected) - known:
         raise HTTPException(400, "One or more selected DMart categories are invalid")
     selected_json = json.dumps(selected)
-    script = f'''/* Rams Boutique DMart CSV exporter.
+    script = f'''/* BTA FreshMart DMart CSV exporter.
 Run this entire file in the browser Console while signed into https://www.dmart.in/.
 It reads only the selected public catalogue categories and downloads a CSV. */
 (async () => {{
@@ -1440,7 +1480,7 @@ It reads only the selected public catalogue categories and downloads a CSV. */
     link.href = URL.createObjectURL(blob); link.download = "dmart-selected-products.csv"; link.click();
     setTimeout(() => URL.revokeObjectURL(link.href), 1000);
     console.log(`Downloaded ${{rows.length}} non-DMart-own-label products.`);
-    alert(`DMart export complete: ${{rows.length}} products. Upload dmart-selected-products.csv in Rams Boutique Admin.`);
+    alert(`DMart export complete: ${{rows.length}} products. Upload dmart-selected-products.csv in BTA FreshMart Admin.`);
   }} catch (error) {{
     console.error("DMart export failed", error);
     alert(`DMart export failed: ${{error.message}}. Refresh DMart Ready, confirm your delivery location, and try again.`);
@@ -1887,7 +1927,7 @@ async def get_order_by_id(order_id: str):
 
 @api.get("/")
 async def root():
-    return {"message": "Rams Boutique Vizag API", "store": "Dwaraka Nagar", "radius_km": DELIVERY_RADIUS_KM}
+    return {"message": "BTA FreshMart Vizag API", "store": "Dwaraka Nagar", "radius_km": DELIVERY_RADIUS_KM}
 
 app.include_router(api)
 app.include_router(chits_router)

@@ -48,12 +48,9 @@ const AdminLayout = () => {
     <div className="min-h-screen flex bg-gray-100">
       <aside className="w-60 bg-[#2b1608] text-white flex flex-col">
         <div className="p-5 border-b border-white/10">
-          <div className="flex items-center gap-3">
-            <img src="/rb-logo.png" alt="Rams Boutique" className="w-10 h-10 object-contain rounded-full bg-white" />
-            <div>
-              <div className="font-bold font-serif">Rams Boutique</div>
-              <div className="text-[10px] text-gray-400">Vizag Admin</div>
-            </div>
+          <div>
+            <img src="/rb-logo.png" alt="BTA FreshMart" className="h-16 w-auto max-w-full object-contain object-left" />
+            <div className="mt-1 text-[10px] text-gray-400">Vizag Admin</div>
           </div>
         </div>
         <nav className="flex-1 py-3">

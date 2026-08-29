@@ -46,7 +46,7 @@ const Home = () => {
           {[
             { Icon: Truck, t: 'Free delivery', s: 'On orders ₹499+' },
             { Icon: Clock, t: '60-min delivery', s: 'Within 5 km' },
-            { Icon: Percent, t: 'Everyday low prices', s: 'Rams Boutique guarantee' },
+            { Icon: Percent, t: 'Everyday low prices', s: 'BTA FreshMart guarantee' },
             { Icon: ShieldCheck, t: '100% authentic', s: 'Genuine brands' },
           ].map((f) => (
             <div key={f.t} className="flex items-center gap-3">
