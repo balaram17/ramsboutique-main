@@ -213,7 +213,8 @@ async def seed_chit_data():
 
     await db.chit_payments.create_index(
         "razorpay_payment_id",
-        unique=True
+        unique=True,
+        sparse=True,
     )
     await db.chit_payments.create_index("payment_no")
 
