@@ -24,7 +24,7 @@ from datetime import datetime, timezone, timedelta
 
 from auth_utils import (
     hash_password, verify_password, create_token,
-    get_current_user, get_current_admin,
+    get_current_user, get_current_admin, verify_entra_token,
 )
 from seed_data import CATEGORIES, PRODUCTS, BANNERS
 import razorpay
@@ -63,6 +63,10 @@ STORE_LNG = 83.3012
 DELIVERY_RADIUS_KM = 5.0
 
 BLACKSMS_API_KEY = os.environ.get("BLACKSMS_API_KEY", "").strip()
+ENTRA_WORKFORCE_TENANT_ID = os.environ.get("ENTRA_WORKFORCE_TENANT_ID", "").strip()
+ENTRA_WORKFORCE_CLIENT_ID = os.environ.get("ENTRA_WORKFORCE_CLIENT_ID", "").strip()
+ENTRA_EXTERNAL_TENANT_ID = os.environ.get("ENTRA_EXTERNAL_TENANT_ID", "").strip()
+ENTRA_EXTERNAL_CLIENT_ID = os.environ.get("ENTRA_EXTERNAL_CLIENT_ID", "").strip()
 
 # Razorpay
 RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID", "")
@@ -100,6 +104,9 @@ class OtpPhoneIn(BaseModel):
 class OtpCodeVerifyIn(BaseModel):
     phone: str = Field(..., pattern=r"^\d{10}$")
     otp: str = Field(..., min_length=4, max_length=4)
+
+class EntraTokenIn(BaseModel):
+    token: str = Field(..., min_length=100)
 
 class LocationCheckIn(BaseModel):
     lat: float
@@ -601,6 +608,108 @@ async def login(data: LoginIn):
         raise HTTPException(401, "Invalid credentials")
     token = create_token(user["id"], user["role"])
     return {"token": token, "user": {"id": user["id"], "name": user["name"], "email": user["email"], "phone": user["phone"], "role": user["role"]}}
+
+
+def _entra_email(claims: dict) -> str:
+    emails = claims.get("emails") or []
+    return (claims.get("email") or claims.get("preferred_username") or (emails[0] if emails else "")).strip().lower()
+
+
+def _public_user(user: dict) -> dict:
+    return {
+        "id": user["id"],
+        "name": user.get("name", "Customer"),
+        "email": user.get("email", ""),
+        "phone": user.get("phone", ""),
+        "role": user.get("role", "user"),
+    }
+
+
+@api.post("/auth/entra/customer")
+async def entra_customer_login(data: EntraTokenIn):
+    claims = verify_entra_token(
+        data.token, ENTRA_EXTERNAL_TENANT_ID, ENTRA_EXTERNAL_CLIENT_ID, external=True
+    )
+    subject = claims["sub"]
+    email = _entra_email(claims)
+    if not email:
+        raise HTTPException(400, "Microsoft did not return a verified email address")
+    user = await db.users.find_one({"entra_external_id": subject, "role": "user"})
+    if not user:
+        existing = await db.users.find_one({"email": email, "role": "user"})
+        if existing:
+            raise HTTPException(
+                409,
+                "This email already belongs to an account. Sign in with your existing method and link Microsoft from Profile.",
+            )
+        user = {
+            "id": str(uuid.uuid4()),
+            "name": claims.get("name") or email.split("@", 1)[0],
+            "email": email,
+            "phone": "",
+            "entra_external_id": subject,
+            "email_verified": True,
+            "auth_methods": ["entra_email_otp"],
+            "role": "user",
+            "created_at": now_iso(),
+        }
+        await db.users.insert_one(user)
+    token = create_token(user["id"], "user")
+    return {"token": token, "user": _public_user(user), "profile_incomplete": not bool(user.get("phone"))}
+
+
+@api.post("/auth/entra/link-customer")
+async def link_entra_customer(data: EntraTokenIn, current=Depends(get_current_user)):
+    if current["role"] != "user":
+        raise HTTPException(403, "Customer account required")
+    claims = verify_entra_token(
+        data.token, ENTRA_EXTERNAL_TENANT_ID, ENTRA_EXTERNAL_CLIENT_ID, external=True
+    )
+    email = _entra_email(claims)
+    user = await db.users.find_one({"id": current["user_id"], "role": "user"})
+    if not user:
+        raise HTTPException(404, "User not found")
+    if email != user.get("email", "").strip().lower():
+        raise HTTPException(409, "Microsoft email must match the signed-in account email")
+    duplicate = await db.users.find_one({"entra_external_id": claims["sub"], "id": {"$ne": user["id"]}})
+    if duplicate:
+        raise HTTPException(409, "This Microsoft identity is already linked")
+    methods = list(dict.fromkeys([*(user.get("auth_methods") or []), "entra_email_otp"]))
+    await db.users.update_one(
+        {"id": user["id"]},
+        {"$set": {"entra_external_id": claims["sub"], "email_verified": True, "auth_methods": methods}},
+    )
+    return {"status": "linked", "email": email}
+
+
+@api.post("/auth/entra/staff")
+async def entra_staff_login(data: EntraTokenIn):
+    claims = verify_entra_token(data.token, ENTRA_WORKFORCE_TENANT_ID, ENTRA_WORKFORCE_CLIENT_ID)
+    app_roles = {str(role).lower() for role in claims.get("roles", [])}
+    role = "admin" if "admin" in app_roles else "agent" if "agent" in app_roles else None
+    if not role:
+        raise HTTPException(403, "Your Microsoft account is not assigned the Admin or Agent application role")
+    email = _entra_email(claims)
+    name = claims.get("name") or email or "Staff member"
+    if role == "admin":
+        user = await db.users.find_one({"entra_workforce_id": claims["sub"], "role": "admin"})
+        if not user:
+            user = {
+                "id": str(uuid.uuid4()), "name": name, "email": email, "phone": "",
+                "role": "admin", "entra_workforce_id": claims["sub"], "created_at": now_iso(),
+            }
+            await db.users.insert_one(user)
+        local_token = create_token(user["id"], "admin")
+        return {"token": local_token, "user": _public_user(user), "role": "admin"}
+    staff = await db.agents.find_one({"entra_workforce_id": claims["sub"]})
+    if not staff:
+        staff = {
+            "id": str(uuid.uuid4()), "name": name, "email": email, "phone": "",
+            "role": "agent", "active": True, "entra_workforce_id": claims["sub"], "created_at": now_iso(),
+        }
+        await db.agents.insert_one(staff)
+    local_token = create_token(staff["id"], "agent")
+    return {"token": local_token, "agent_id": staff["id"], "name": staff["name"], "role": "agent"}
 
 @api.post("/auth/agent")
 async def agent(data: LoginAgentIn):
