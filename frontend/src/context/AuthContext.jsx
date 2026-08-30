@@ -47,6 +47,31 @@ export const AuthProvider = ({ children }) => {
     return data.user;
   }, []);
 
+  const entraCustomerLogin = useCallback(async (identityToken) => {
+    const { data } = await api.post('/auth/entra/customer', { token: identityToken });
+    storeToken(data.token);
+    setUser(data.user);
+    return data;
+  }, []);
+
+  const entraStaffLogin = useCallback(async (identityToken) => {
+    const { data } = await api.post('/auth/entra/staff', { token: identityToken });
+    if (data.role === 'admin') {
+      storeToken(data.token);
+      setUser(data.user);
+    } else {
+      localStorage.setItem('agentToken', data.token);
+      localStorage.setItem('agentId', data.agent_id);
+      localStorage.setItem('agentName', data.name);
+    }
+    return data;
+  }, []);
+
+  const linkEntraCustomer = useCallback(async (identityToken) => {
+    const { data } = await api.post('/auth/entra/link-customer', { token: identityToken });
+    return data;
+  }, []);
+
 const verifyOtp = useCallback(async (phone, otp) => {
   // Directly fires values to your self-managed FastAPI routes
   const { data } = await api.post('/auth/verify-otp', { 
@@ -70,8 +95,8 @@ const verifyOtp = useCallback(async (phone, otp) => {
   }, []);
 
   const value = useMemo(
-    () => ({ user, loading, login, adminLogin, signup, verifyOtp, updateProfile, logout }),
-    [user, loading, login, adminLogin, signup, verifyOtp, updateProfile, logout],
+    () => ({ user, loading, login, adminLogin, signup, verifyOtp, entraCustomerLogin, entraStaffLogin, linkEntraCustomer, updateProfile, logout }),
+    [user, loading, login, adminLogin, signup, verifyOtp, entraCustomerLogin, entraStaffLogin, linkEntraCustomer, updateProfile, logout],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
