@@ -1,6 +1,8 @@
 import { PublicClientApplication } from '@azure/msal-browser';
 
-const redirectUri = window.location.origin;
+// A minimal static callback prevents the React router from rendering the
+// storefront inside an MSAL popup before the opener can process the response.
+const redirectUri = `${window.location.origin}/auth-popup.html`;
 
 const createClient = (clientId, authority) => {
   if (!clientId || !authority) return null;
