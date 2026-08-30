@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { Button } from '../../components/ui/button';
@@ -6,7 +6,7 @@ import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { useToast } from '../../hooks/use-toast';
 import { ShieldCheck, Loader2 } from 'lucide-react';
-import { entraConfigured, signInStaffWithMicrosoft } from '../../lib/entraAuth';
+import { completeStaffMicrosoftRedirect, entraConfigured, signInStaffWithMicrosoft } from '../../lib/entraAuth';
 
 const AdminLogin = () => {
   const { adminLogin, entraStaffLogin } = useAuth();
@@ -14,6 +14,25 @@ const AdminLogin = () => {
   const { toast } = useToast();
   const [busy, setBusy] = useState(false);
   const [f, setF] = useState({ email: '', password: '' });
+
+  useEffect(() => {
+    let cancelled = false;
+    const finishMicrosoftLogin = async () => {
+      try {
+        const identityToken = await completeStaffMicrosoftRedirect();
+        if (!identityToken || cancelled) return;
+        setBusy(true);
+        const result = await entraStaffLogin(identityToken);
+        if (!cancelled) nav(result.role === 'admin' ? '/admin' : '/agent/dashboard', { replace: true });
+      } catch (e) {
+        if (!cancelled) toast({ title: 'Microsoft staff login failed', description: e.response?.data?.detail || e.message || 'Access denied', variant: 'destructive' });
+      } finally {
+        if (!cancelled) setBusy(false);
+      }
+    };
+    finishMicrosoftLogin();
+    return () => { cancelled = true; };
+  }, [entraStaffLogin, nav, toast]);
 
   const submit = async (e) => {
     e.preventDefault(); setBusy(true);
@@ -25,9 +44,7 @@ const AdminLogin = () => {
   const microsoftLogin = async () => {
     setBusy(true);
     try {
-      const identityToken = await signInStaffWithMicrosoft();
-      const result = await entraStaffLogin(identityToken);
-      nav(result.role === 'admin' ? '/admin' : '/agent/dashboard');
+      await signInStaffWithMicrosoft();
     } catch (e) {
       toast({ title: 'Microsoft staff login failed', description: e.response?.data?.detail || e.message || 'Access denied', variant: 'destructive' });
     } finally { setBusy(false); }
