@@ -1,10 +1,9 @@
 import { PublicClientApplication } from '@azure/msal-browser';
 
-// A minimal static callback prevents the React router from rendering the
-// storefront inside an MSAL popup before the opener can process the response.
-const redirectUri = `${window.location.origin}/auth-popup.html`;
+const popupRedirectUri = `${window.location.origin}/auth-popup.html`;
+const staffRedirectUri = `${window.location.origin}/admin/login`;
 
-const createClient = (clientId, authority) => {
+const createClient = (clientId, authority, redirectUri = popupRedirectUri) => {
   if (!clientId || !authority) return null;
   return new PublicClientApplication({
     auth: { clientId, authority, redirectUri, postLogoutRedirectUri: redirectUri },
@@ -19,10 +18,12 @@ const customerClient = createClient(
 const staffClient = createClient(
   process.env.REACT_APP_ENTRA_WORKFORCE_CLIENT_ID,
   process.env.REACT_APP_ENTRA_WORKFORCE_AUTHORITY,
+  staffRedirectUri,
 );
 
 let customerReady;
 let staffReady;
+let staffRedirectResult;
 
 const signIn = async (client, kind) => {
   if (!client) throw new Error(`Microsoft ${kind} sign-in is not configured`);
@@ -40,4 +41,22 @@ export const entraConfigured = {
 };
 
 export const signInCustomerWithMicrosoft = () => signIn(customerClient, 'customer');
-export const signInStaffWithMicrosoft = () => signIn(staffClient, 'staff');
+export const signInStaffWithMicrosoft = async () => {
+  if (!staffClient) throw new Error('Microsoft staff sign-in is not configured');
+  staffReady ||= staffClient.initialize();
+  await staffReady;
+  await staffClient.loginRedirect({
+    scopes: ['openid', 'profile', 'email'],
+    prompt: 'select_account',
+    redirectUri: staffRedirectUri,
+  });
+};
+
+export const completeStaffMicrosoftRedirect = async () => {
+  if (!staffClient) return null;
+  staffReady ||= staffClient.initialize();
+  await staffReady;
+  staffRedirectResult ||= staffClient.handleRedirectPromise();
+  const result = await staffRedirectResult;
+  return result?.idToken || null;
+};
