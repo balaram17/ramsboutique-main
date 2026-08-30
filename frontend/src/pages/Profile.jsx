@@ -1,12 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { User, Mail, Phone, Bell, BellOff, Loader2, Pencil, Save, X } from 'lucide-react';
+import { User, Mail, Phone, Bell, BellOff, Loader2, Pencil, Save, ShieldCheck, X } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { pushSupported, currentPushStatus, enablePush, disablePush } from '../lib/push';
 import { useToast } from '../hooks/use-toast';
+import { entraConfigured, signInCustomerWithMicrosoft } from '../lib/entraAuth';
 
 const Profile = () => {
-  const { user, updateProfile } = useAuth();
+  const { user, updateProfile, linkEntraCustomer } = useAuth();
   const { toast } = useToast();
   const [pushState, setPushState] = useState({ supported: false, permission: 'default', subscribed: false });
   const [busy, setBusy] = useState(false);
@@ -61,6 +62,17 @@ const Profile = () => {
     } finally { setBusy(false); }
   };
 
+  const linkMicrosoft = async () => {
+    setBusy(true);
+    try {
+      const identityToken = await signInCustomerWithMicrosoft();
+      await linkEntraCustomer(identityToken);
+      toast({ title: 'Email OTP login enabled', description: `Microsoft sign-in is now linked to ${user.email}.` });
+    } catch (error) {
+      toast({ title: 'Could not link Microsoft', description: error.response?.data?.detail || error.message || 'Try again', variant: 'destructive' });
+    } finally { setBusy(false); }
+  };
+
   return (
     <div className="max-w-2xl mx-auto px-4 py-8 space-y-4">
       <div className="bg-white rounded-lg border p-6">
@@ -85,6 +97,14 @@ const Profile = () => {
           <label className="block text-sm font-semibold">Mobile number<input inputMode="numeric" pattern="[0-9]{10}" maxLength="10" className="mt-1 w-full border rounded-md px-3 py-2" value={form.phone} onChange={e=>setForm({...form,phone:e.target.value.replace(/\D/g,'')})} required/></label>
           <div className="flex justify-end gap-2"><Button type="button" variant="outline" onClick={()=>setEditing(false)}><X className="w-4 h-4 mr-2"/>Cancel</Button><Button type="submit" disabled={busy} className="bg-[#6b3410] hover:bg-[#4d260b]"><Save className="w-4 h-4 mr-2"/>{busy?'Saving…':'Save Changes'}</Button></div>
         </form>}
+      </div>
+
+      <div className="bg-white rounded-lg border p-6">
+        <div className="flex items-center gap-3 mb-2"><ShieldCheck className="w-5 h-5 text-[#6b3410]" /><h2 className="font-semibold">Email OTP Login</h2></div>
+        <p className="text-xs text-gray-500 mb-3">Link your verified Microsoft email identity so you can sign in without a password. The Microsoft email must match your profile email.</p>
+        <Button onClick={linkMicrosoft} disabled={busy || !entraConfigured.customer} variant="outline" className="border-[#6b3410] text-[#6b3410]">
+          {busy && <Loader2 className="w-4 h-4 mr-2 animate-spin" />} Link Email OTP Login
+        </Button>
       </div>
 
       <div className="bg-white rounded-lg border p-6">

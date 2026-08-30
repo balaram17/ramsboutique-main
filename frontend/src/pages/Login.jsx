@@ -7,14 +7,15 @@ import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs';
 import { useToast } from '../hooks/use-toast';
-import { Loader2, Truck, User } from 'lucide-react';
+import { Loader2, Mail, ShieldCheck, Truck, User } from 'lucide-react';
 import api from '../lib/api';
 import axios from 'axios';
+import { entraConfigured, signInCustomerWithMicrosoft, signInStaffWithMicrosoft } from '../lib/entraAuth';
 
 const API_BASE_URL = process.env.REACT_APP_API_BASE_URL;
 
 const Login = () => {
-  const { login, signup, verifyOtp } = useAuth();
+  const { login, signup, verifyOtp, entraCustomerLogin, entraStaffLogin } = useAuth();
   const nav = useNavigate();
   const [sp] = useSearchParams();
   const nextTo = sp.get('next') || '/';
@@ -44,6 +45,29 @@ const Login = () => {
     try { await signup(signF); nav(nextTo); }
     catch (e) { toast({ title: 'Signup failed', description: e.response?.data?.detail || 'Try again', variant: 'destructive' }); }
     finally { setBusy(false); }
+  };
+
+  const doEntraCustomerLogin = async () => {
+    setBusy(true);
+    try {
+      const identityToken = await signInCustomerWithMicrosoft();
+      const result = await entraCustomerLogin(identityToken);
+      toast({ title: 'Email verified', description: 'Signed in securely with Microsoft.' });
+      nav(result.profile_incomplete ? '/profile' : nextTo);
+    } catch (e) {
+      toast({ title: 'Microsoft sign-in failed', description: e.response?.data?.detail || e.message || 'Try again', variant: 'destructive' });
+    } finally { setBusy(false); }
+  };
+
+  const doEntraStaffLogin = async () => {
+    setBusy(true);
+    try {
+      const identityToken = await signInStaffWithMicrosoft();
+      const result = await entraStaffLogin(identityToken);
+      nav(result.role === 'admin' ? '/admin' : '/agent/dashboard');
+    } catch (e) {
+      toast({ title: 'Staff access denied', description: e.response?.data?.detail || e.message || 'Your account is not assigned a staff role.', variant: 'destructive' });
+    } finally { setBusy(false); }
   };
 
   React.useEffect(() => {
@@ -168,6 +192,13 @@ const doAgentLogin = async (e) => {
           <p className="text-sm text-gray-500">{l.subheading}</p>
         </div>
 
+        <Button type="button" onClick={doEntraCustomerLogin} disabled={busy || !entraConfigured.customer} variant="outline" className="w-full mb-3 border-[#6b3410] text-[#6b3410]">
+          <Mail className="w-4 h-4 mr-2" /> Continue with Email OTP
+        </Button>
+        {!entraConfigured.customer && <p className="text-xs text-amber-700 text-center mb-3">Email OTP will be available after Azure configuration.</p>}
+
+        <div className="relative mb-3"><div className="border-t" /><span className="absolute left-1/2 -translate-x-1/2 -top-2.5 bg-white px-2 text-xs text-gray-400">or use an existing method</span></div>
+
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList className="grid w-full grid-cols-4">
             <TabsTrigger value="login">Login</TabsTrigger>
@@ -233,6 +264,10 @@ const doAgentLogin = async (e) => {
 
           <TabsContent value="agent">
             <form onSubmit={doAgentLogin} className="space-y-4 mt-3">
+              <Button type="button" onClick={doEntraStaffLogin} disabled={busy || !entraConfigured.staff} variant="outline" className="w-full">
+                <ShieldCheck className="w-4 h-4 mr-2" /> Staff Login with Microsoft
+              </Button>
+              <div className="text-center text-xs text-gray-400">or use the existing agent phone login</div>
               <div>
                 <Label>Registered Phone Number</Label>
                 <div className="relative flex rounded-md mt-1">
