@@ -2,6 +2,7 @@ import { useNavigate } from 'react-router-dom';
 import { LogOut, ChevronDown, Package, User, Phone, MapPin, Clock } from 'lucide-react';
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import axios from 'axios';
+import { signOutStaffWithMicrosoft } from '../lib/entraAuth';
 
 const API_BASE_URL = process.env.REACT_APP_API_BASE_URL;
 
@@ -88,11 +89,12 @@ const AgentDashboard = () => {
     }
   };
 
-  const logout = () => {
+  const logout = async () => {
     localStorage.removeItem('agentToken');
     localStorage.removeItem('agentId');
     localStorage.removeItem('agentName');
-    nav('/login');
+    const redirected = await signOutStaffWithMicrosoft().catch(() => false);
+    if (!redirected) nav('/login', { replace: true });
   };
 
   // If there is no token, don't flash the dashboard components or the loading text
