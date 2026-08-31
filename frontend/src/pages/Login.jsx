@@ -10,7 +10,7 @@ import { useToast } from '../hooks/use-toast';
 import { Loader2, Mail, ShieldCheck, Truck, User } from 'lucide-react';
 import api from '../lib/api';
 import axios from 'axios';
-import { entraConfigured, signInCustomerWithMicrosoft, signInStaffWithMicrosoft } from '../lib/entraAuth';
+import { completeStaffMicrosoftRedirect, entraConfigured, signInCustomerWithMicrosoft, signInStaffWithMicrosoft } from '../lib/entraAuth';
 
 const API_BASE_URL = process.env.REACT_APP_API_BASE_URL;
 
@@ -62,13 +62,32 @@ const Login = () => {
   const doEntraStaffLogin = async () => {
     setBusy(true);
     try {
-      const identityToken = await signInStaffWithMicrosoft();
-      const result = await entraStaffLogin(identityToken);
-      nav(result.role === 'admin' ? '/admin' : '/agent/dashboard');
+      await signInStaffWithMicrosoft();
     } catch (e) {
       toast({ title: 'Staff access denied', description: e.response?.data?.detail || e.message || 'Your account is not assigned a staff role.', variant: 'destructive' });
     } finally { setBusy(false); }
   };
+
+  React.useEffect(() => {
+    let cancelled = false;
+    const finishStaffLogin = async () => {
+      try {
+        const identityToken = await completeStaffMicrosoftRedirect();
+        if (!identityToken || cancelled) return;
+        setBusy(true);
+        const result = await entraStaffLogin(identityToken);
+        if (!cancelled) nav(result.role === 'admin' ? '/admin' : '/agent/dashboard', { replace: true });
+      } catch (e) {
+        if (!cancelled) {
+          toast({ title: 'Staff access denied', description: e.response?.data?.detail || e.message || 'Your account is not assigned a staff role.', variant: 'destructive' });
+        }
+      } finally {
+        if (!cancelled) setBusy(false);
+      }
+    };
+    finishStaffLogin();
+    return () => { cancelled = true; };
+  }, [entraStaffLogin, nav, toast]);
 
   React.useEffect(() => {
   if (cooldown > 0) {
