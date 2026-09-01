@@ -34,6 +34,7 @@ load_dotenv(ROOT_DIR / ".env")
 from chits import router as chits_router, seed_chit_data, start_chit_scheduler, stop_chit_scheduler
 from catalog_sync import inspect_source, proposed_update
 from dmart_sync import DMART_CATEGORIES, DMART_PINCODE, sync_categories
+from entra_provisioning import EntraAgentProvisioner, EntraProvisioningError
 
 mongo_url = os.environ["MONGO_URL"]
 client = AsyncIOMotorClient(mongo_url)
@@ -65,8 +66,22 @@ DELIVERY_RADIUS_KM = 5.0
 BLACKSMS_API_KEY = os.environ.get("BLACKSMS_API_KEY", "").strip()
 ENTRA_WORKFORCE_TENANT_ID = os.environ.get("ENTRA_WORKFORCE_TENANT_ID", "").strip()
 ENTRA_WORKFORCE_CLIENT_ID = os.environ.get("ENTRA_WORKFORCE_CLIENT_ID", "").strip()
+ENTRA_PROVISIONING_CLIENT_ID = os.environ.get("ENTRA_PROVISIONING_CLIENT_ID", "").strip()
+ENTRA_PROVISIONING_CLIENT_SECRET = os.environ.get("ENTRA_PROVISIONING_CLIENT_SECRET", "").strip()
+ENTRA_WORKFORCE_USER_DOMAIN = os.environ.get("ENTRA_WORKFORCE_USER_DOMAIN", "ramsboutique.com").strip()
+ENTRA_WORKFORCE_SERVICE_PRINCIPAL_ID = os.environ.get("ENTRA_WORKFORCE_SERVICE_PRINCIPAL_ID", "").strip()
+ENTRA_AGENT_APP_ROLE_ID = os.environ.get("ENTRA_AGENT_APP_ROLE_ID", "").strip()
 ENTRA_EXTERNAL_TENANT_ID = os.environ.get("ENTRA_EXTERNAL_TENANT_ID", "").strip()
 ENTRA_EXTERNAL_CLIENT_ID = os.environ.get("ENTRA_EXTERNAL_CLIENT_ID", "").strip()
+
+entra_agent_provisioner = EntraAgentProvisioner(
+    ENTRA_WORKFORCE_TENANT_ID,
+    ENTRA_PROVISIONING_CLIENT_ID,
+    ENTRA_PROVISIONING_CLIENT_SECRET,
+    ENTRA_WORKFORCE_USER_DOMAIN,
+    ENTRA_WORKFORCE_SERVICE_PRINCIPAL_ID,
+    ENTRA_AGENT_APP_ROLE_ID,
+)
 
 # Razorpay
 RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID", "")
@@ -191,8 +206,8 @@ class ProductVisibilityIn(BaseModel):
 
 
 class AgentIn(BaseModel):
-    name: str
-    phone: str
+    name: str = Field(..., min_length=2, max_length=100)
+    phone: str = Field(..., pattern=r"^\d{10}$")
     active: bool = True
 
 
@@ -711,41 +726,23 @@ async def entra_staff_login(data: EntraTokenIn):
             await db.users.insert_one(user)
         local_token = create_token(user["id"], "admin")
         return {"token": local_token, "user": _public_user(user), "role": "admin"}
-    staff = await db.agents.find_one({"entra_workforce_id": claims["sub"]})
-    if not staff and email:
-        staff = await db.agents.find_one({"email": email})
-        if staff:
-            await db.agents.update_one(
-                {"id": staff["id"]},
-                {"$set": {"entra_workforce_id": claims["sub"]}},
-            )
-            staff["entra_workforce_id"] = claims["sub"]
+    entra_object_id = claims.get("oid") or claims["sub"]
+    staff = await db.agents.find_one({"entra_object_id": entra_object_id})
     if not staff:
-        staff = {
-            "id": str(uuid.uuid4()), "name": name, "email": email, "phone": "",
-            "role": "agent", "active": True, "entra_workforce_id": claims["sub"], "created_at": now_iso(),
-        }
-        await db.agents.insert_one(staff)
+        # Compatibility with agents linked before object-id provisioning was introduced.
+        staff = await db.agents.find_one({"entra_workforce_id": claims["sub"]})
+    if not staff:
+        raise HTTPException(403, "This Microsoft identity is not linked to an Agent created by the Admin")
+    if not staff.get("active"):
+        raise HTTPException(403, "This Agent account is inactive")
+    if not re.fullmatch(r"\d{10}", str(staff.get("phone", ""))):
+        raise HTTPException(403, "The Agent mobile number is missing or invalid")
     local_token = create_token(staff["id"], "agent")
     return {"token": local_token, "agent_id": staff["id"], "name": staff["name"], "role": "agent"}
 
 @api.post("/auth/agent")
 async def agent(data: LoginAgentIn):
-    phone = data.phone.strip()
-    user = await db.agents.find_one({
-        "phone": phone,
-        "active": True
-    })
-    if not user:
-        raise HTTPException(401, "Mobile number not found in Agent collection.")
-    token = create_token(user["id"], "agent")
-    return {
-        "token": token,
-        "agent_id": user["id"],
-        "name": user["name"],
-        "phone": user["phone"],
-        "role": "agent"
-    }
+    raise HTTPException(410, "Phone-only Agent login is disabled. Use Microsoft Authenticator login.")
 
 @api.get("/debug/agents")
 async def debug_agents():
@@ -1957,22 +1954,70 @@ async def admin_agents(_=Depends(get_current_admin)):
 
 @api.post("/admin/agents")
 async def admin_create_agent(a: AgentIn, _=Depends(get_current_admin)):
-    doc = {"id": str(uuid.uuid4()), **a.dict(), "created_at": now_iso()}
+    if not entra_agent_provisioner.configured:
+        raise HTTPException(503, "Microsoft Entra agent provisioning is not configured")
+    if await db.agents.find_one({"phone": a.phone}):
+        raise HTTPException(409, "An Agent with this mobile number already exists")
+    try:
+        provisioned = await entra_agent_provisioner.create_agent(a.name.strip(), a.phone)
+    except EntraProvisioningError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    doc = {
+        "id": str(uuid.uuid4()), **a.dict(), "name": a.name.strip(), "role": "agent",
+        "entra_object_id": provisioned["object_id"],
+        "entra_username": provisioned["username"],
+        "entra_app_role_assignment_id": provisioned["app_role_assignment_id"],
+        "entra_status": "active" if a.active else "inactive",
+        "created_at": now_iso(),
+    }
+    if not a.active:
+        try:
+            await entra_agent_provisioner.update_agent(provisioned["object_id"], a.name.strip(), a.phone, False)
+        except EntraProvisioningError as exc:
+            raise HTTPException(502, str(exc)) from exc
     await db.agents.insert_one(doc)
-    return clean(doc)
+    result = clean(doc)
+    result["onboarding"] = {
+        "username": provisioned["username"],
+        "temporary_password": provisioned["temporary_password"],
+        "instructions": "Sign in with Microsoft, change this temporary password, then register Microsoft Authenticator.",
+    }
+    return result
 
 
 @api.patch("/admin/agents/{aid}")
 async def admin_update_agent(aid: str, a: AgentIn, _=Depends(get_current_admin)):
-    res = await db.agents.update_one({"id": aid}, {"$set": a.dict()})
-    if res.matched_count == 0:
+    doc = await db.agents.find_one({"id": aid})
+    if not doc:
         raise HTTPException(404, "Not found")
+    duplicate = await db.agents.find_one({"phone": a.phone, "id": {"$ne": aid}})
+    if duplicate:
+        raise HTTPException(409, "An Agent with this mobile number already exists")
+    if doc.get("entra_object_id"):
+        try:
+            await entra_agent_provisioner.update_agent(doc["entra_object_id"], a.name.strip(), a.phone, a.active)
+        except EntraProvisioningError as exc:
+            raise HTTPException(502, str(exc)) from exc
+    await db.agents.update_one({"id": aid}, {"$set": {
+        **a.dict(), "name": a.name.strip(),
+        "entra_status": "active" if a.active else "inactive",
+    }})
     doc = await db.agents.find_one({"id": aid})
     return clean(doc)
 
 
 @api.delete("/admin/agents/{aid}")
 async def admin_delete_agent(aid: str, _=Depends(get_current_admin)):
+    doc = await db.agents.find_one({"id": aid})
+    if not doc:
+        raise HTTPException(404, "Not found")
+    if doc.get("entra_object_id"):
+        try:
+            await entra_agent_provisioner.revoke_role(
+                doc["entra_object_id"], doc.get("entra_app_role_assignment_id", "")
+            )
+        except EntraProvisioningError as exc:
+            raise HTTPException(502, str(exc)) from exc
     await db.agents.delete_one({"id": aid})
     return {"ok": True}
 
