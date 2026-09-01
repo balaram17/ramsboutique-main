@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom';
-import { LogOut, ChevronDown, Package, User, Phone, MapPin, Clock } from 'lucide-react';
+import { LogOut, ChevronDown, Package, User, Phone, MapPin, Clock, ShieldCheck, Send } from 'lucide-react';
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import axios from 'axios';
 import { signOutStaffWithMicrosoft } from '../lib/entraAuth';
@@ -11,6 +11,8 @@ const AgentDashboard = () => {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showMenu, setShowMenu] = useState(false);
+  const [deliveryForms, setDeliveryForms] = useState({});
+  const [busyOrder, setBusyOrder] = useState(null);
   const nav = useNavigate();
   
   const token = localStorage.getItem('agentToken');
@@ -53,12 +55,52 @@ const AgentDashboard = () => {
 
   const updateStatus = async (orderId, status) => {
     try {
-      await api.patch(`/api/agent/orders/${orderId}`, { status });
-      setOrders(prev =>
-        prev.map(o => (o.id === orderId ? { ...o, status } : o))
-      );
+      setBusyOrder(orderId);
+      const { data } = await api.patch(`/api/agent/orders/${orderId}`, { status });
+      setOrders(prev => prev.map(o => (o.id === orderId ? data : o)));
     } catch (err) {
       alert(err.response?.data?.detail || 'Status update failed');
+    } finally {
+      setBusyOrder(null);
+    }
+  };
+
+  const patchDeliveryForm = (orderId, patch) => {
+    setDeliveryForms(prev => ({ ...prev, [orderId]: { ...prev[orderId], ...patch } }));
+  };
+
+  const sendDeliveryOtp = async (orderId) => {
+    try {
+      setBusyOrder(orderId);
+      await api.post(`/api/agent/orders/${orderId}/delivery-otp`);
+      patchDeliveryForm(orderId, { sent: true, otp: '' });
+      alert('Delivery OTP sent to the customer. It expires in 10 minutes.');
+    } catch (err) {
+      alert(err.response?.data?.detail || 'Unable to send delivery OTP');
+    } finally {
+      setBusyOrder(null);
+    }
+  };
+
+  const verifyDeliveryOtp = async (order) => {
+    const form = deliveryForms[order.id] || {};
+    if (!/^\d{4}$/.test(form.otp || '')) {
+      alert('Enter the 4-digit OTP received by the customer');
+      return;
+    }
+    try {
+      setBusyOrder(order.id);
+      const { data } = await api.post(`/api/agent/orders/${order.id}/verify-delivery-otp`, {
+        otp: form.otp,
+        payment_collected: Boolean(form.paymentCollected)
+      });
+      setOrders(prev => prev.map(o => (o.id === order.id ? data : o)));
+      patchDeliveryForm(order.id, { otp: '', sent: false, paymentCollected: false });
+      alert('Delivery verified and completed');
+    } catch (err) {
+      alert(err.response?.data?.detail || 'Delivery verification failed');
+    } finally {
+      setBusyOrder(null);
     }
   };
 
@@ -244,28 +286,37 @@ const AgentDashboard = () => {
                     </div>
 
                     <div>
-                      <div className="font-medium mb-2 text-sm">Update Status</div>
+                      <div className="font-medium mb-2 text-sm">Delivery progress</div>
                       <div className="flex flex-wrap gap-2">
-                        <button
-                          onClick={() => updateStatus(order.id, 'packed')}
-                          className="px-3 py-2 rounded bg-yellow-500 text-white hover:bg-yellow-600 text-sm"
-                        >
-                          Packed
-                        </button>
-                        <button
-                          onClick={() => updateStatus(order.id, 'out_for_delivery')}
-                          className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 text-sm"
-                        >
-                          Out for Delivery
-                        </button>
-                        <button
-                          onClick={() => updateStatus(order.id, 'delivered')}
-
-                          className="px-3 py-2 rounded bg-green-600 text-white hover:bg-green-700 text-sm"
-                        >
-                          Delivered
-                        </button>
+                        {order.status === 'assigned' && <button disabled={busyOrder === order.id} onClick={() => updateStatus(order.id, 'accepted')} className="px-3 py-2 rounded bg-indigo-600 text-white disabled:opacity-50 text-sm">Accept delivery</button>}
+                        {['accepted', 'packed'].includes(order.status) && <button disabled={busyOrder === order.id} onClick={() => updateStatus(order.id, 'picked_up')} className="px-3 py-2 rounded bg-yellow-600 text-white disabled:opacity-50 text-sm">Picked up</button>}
+                        {order.status === 'picked_up' && <button disabled={busyOrder === order.id} onClick={() => updateStatus(order.id, 'out_for_delivery')} className="px-3 py-2 rounded bg-blue-600 text-white disabled:opacity-50 text-sm">Out for delivery</button>}
+                        {order.status === 'delivered' && <span className="inline-flex items-center gap-2 rounded bg-green-100 px-3 py-2 text-sm font-semibold text-green-700"><ShieldCheck className="w-4 h-4" /> Delivery verified</span>}
                       </div>
+                      {order.status === 'out_for_delivery' && (
+                        <div className="mt-3 space-y-3 rounded-lg border border-blue-200 bg-blue-50 p-3">
+                          <button disabled={busyOrder === order.id} onClick={() => sendDeliveryOtp(order.id)} className="flex items-center gap-2 rounded bg-blue-600 px-3 py-2 text-sm text-white disabled:opacity-50">
+                            <Send className="h-4 w-4" /> {deliveryForms[order.id]?.sent ? 'Resend delivery OTP' : 'Send delivery OTP'}
+                          </button>
+                          <input
+                            aria-label="Delivery OTP"
+                            inputMode="numeric"
+                            maxLength={4}
+                            placeholder="4-digit customer OTP"
+                            className="w-full rounded border px-3 py-2 text-sm"
+                            value={deliveryForms[order.id]?.otp || ''}
+                            onChange={e => patchDeliveryForm(order.id, { otp: e.target.value.replace(/\D/g, '') })}
+                          />
+                          {String(order.payment_method).toUpperCase() === 'COD' && (
+                            <label className="flex items-center gap-2 text-sm font-medium text-gray-700">
+                              <input type="checkbox" checked={Boolean(deliveryForms[order.id]?.paymentCollected)} onChange={e => patchDeliveryForm(order.id, { paymentCollected: e.target.checked })} />
+                              COD cash collected: ₹{order.total}
+                            </label>
+                          )}
+                          <button disabled={busyOrder === order.id} onClick={() => verifyDeliveryOtp(order)} className="w-full rounded bg-green-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">Verify OTP & complete delivery</button>
+                          <p className="text-xs text-blue-800">OTP expires in 10 minutes. Maximum 5 attempts.</p>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
