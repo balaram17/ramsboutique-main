@@ -32,4 +32,16 @@ FastAPI verifies Microsoft signatures, issuer, audience, expiry and required cla
 - React variables are build-time values and must be configured before rebuilding Azure Static Web Apps.
 - FastAPI variables are App Service application settings; restart the App Service after adding them.
 - No client secret belongs in React or in this repository.
-- Keep the current admin/password and phone OTP paths enabled until production Entra testing passes.
+- Keep the current customer authentication paths enabled. Agent phone-only login is disabled because possession of a phone number is not authentication.
+
+## Zero-cost Agent provisioning
+
+This workflow does not use SMS, Temporary Access Pass, Conditional Access, or Entra ID P1.
+
+1. Create a separate single-tenant confidential app registration named `BTA FreshMart Agent Provisioning`.
+2. Grant Microsoft Graph **application** permissions `User.ReadWrite.All`, `AppRoleAssignment.ReadWrite.All`, `User.EnableDisableAccount.All`, and `User.Read.All`, then grant Admin consent.
+3. Create a client secret and save it only as an Azure App Service application setting.
+4. Configure the six `ENTRA_PROVISIONING_*` / workforce values shown in `backend/entra.env.template`.
+5. Keep Microsoft Authenticator enabled in Authentication methods. Security defaults can provide basic MFA registration without a P1 licence.
+
+When an Admin creates an Agent, the backend creates a cloud-only Entra user, writes the verified ten-digit mobile number to both systems, assigns the existing `Agent` application role, and returns the generated username and temporary password once. The password is never stored in MongoDB. Entra requires it to be changed at first sign-in. Agent dashboard access additionally requires the token's immutable Entra object ID to match an active local Agent with a valid phone number.
