@@ -9,10 +9,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs'
 import { useToast } from '../hooks/use-toast';
 import { Loader2, Mail, ShieldCheck, Truck, User } from 'lucide-react';
 import api from '../lib/api';
-import axios from 'axios';
 import { completeStaffMicrosoftRedirect, entraConfigured, signInCustomerWithMicrosoft, signInStaffWithMicrosoft } from '../lib/entraAuth';
-
-const API_BASE_URL = process.env.REACT_APP_API_BASE_URL;
 
 const Login = () => {
   const { login, signup, verifyOtp, entraCustomerLogin, entraStaffLogin } = useAuth();
@@ -29,7 +26,6 @@ const Login = () => {
   const [signF, setSignF] = useState({ name: '', email: '', phone: '', password: '' });
   const [otpF, setOtpF] = useState({ phone: '', otp: '', sent: false });
   
-  const [agentPhone, setAgentPhone] = useState('');
   const [cooldown, setCooldown] = useState(0);
   const [activeTab, setActiveTab] = useState(sp.get('tab') || 'login');
 
@@ -167,39 +163,6 @@ const Login = () => {
     }
   };
 
-const doAgentLogin = async (e) => {
-    e.preventDefault();
-    if (agentPhone.length !== 10) {
-      return toast({
-        title: 'Validation Error',
-        description: 'Enter a valid 10-digit mobile number.',
-        variant: 'destructive',
-      });
-    }
-    setBusy(true);
-    try {
-      const res = await axios.post(`${API_BASE_URL}/api/auth/agent`, {
-        phone: agentPhone,
-      });
-      localStorage.setItem('agentToken', res.data.token);
-      localStorage.setItem('agentId', res.data.agent_id);
-      localStorage.setItem('agentName', res.data.name);
-      toast({
-        title: 'Login Successful',
-        description: `Welcome back, ${res.data.name}!`,
-      });
-      nav('/agent/dashboard');
-    } catch (err) {
-      toast({
-        title: 'Access Denied',
-        description: err.response?.data?.detail || 'Mobile number not found in Agent collection.',
-        variant: 'destructive',
-      });
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
     <div className="min-h-[80vh] flex items-center justify-center px-4 py-10 bg-gray-50">
       <div className="w-full max-w-md bg-white rounded-lg border shadow-sm p-6">
@@ -282,25 +245,14 @@ const doAgentLogin = async (e) => {
           </TabsContent>
 
           <TabsContent value="agent">
-            <form onSubmit={doAgentLogin} className="space-y-4 mt-3">
+            <div className="space-y-4 mt-3">
               <Button type="button" onClick={doEntraStaffLogin} disabled={busy || !entraConfigured.staff} variant="outline" className="w-full">
-                <ShieldCheck className="w-4 h-4 mr-2" /> Staff Login with Microsoft
+                <ShieldCheck className="w-4 h-4 mr-2" /> Agent Login with Microsoft
               </Button>
-              <div className="text-center text-xs text-gray-400">or use the existing agent phone login</div>
-              <div>
-                <Label>Registered Phone Number</Label>
-                <div className="relative flex rounded-md mt-1">
-                  <Input required disabled={busy} placeholder="Enter 10-digit number" value={agentPhone} maxLength={10} 
-                    onChange={(e) => setAgentPhone(e.target.value.replace(/\D/g, ''))} 
-                  />
-                </div>
+              <div className="text-xs text-gray-500 text-center rounded-md bg-gray-50 p-3">
+                First login: use the Microsoft username and temporary password provided by the Admin. Microsoft will ask you to change the password and register Authenticator.
               </div>
-              <Button type="submit" disabled={busy} className="w-full bg-[#6b3410] hover:bg-[#4d260b]">
-                {busy && <Loader2 className="w-full bg-[#6b3410] hover:bg-[#4d260b]" />} Verify & Sign In
-              </Button>
-              <div className="text-xs text-gray-400 text-center mt-1">The portal will instantly cross-reference our delivery worker network and log you in.
-              </div>
-            </form>
+            </div>
           </TabsContent>
         </Tabs>
 
