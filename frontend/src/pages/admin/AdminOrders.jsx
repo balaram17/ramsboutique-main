@@ -7,7 +7,8 @@ import { Button } from '../../components/ui/button';
 import { useToast } from '../../hooks/use-toast';
 import { MapPin, Package, Eye } from 'lucide-react';
 
-const STATUSES = ['placed', 'packed', 'out_for_delivery', 'delivered', 'cancelled'];
+const STATUSES = ['placed', 'assigned', 'accepted', 'packed', 'picked_up', 'out_for_delivery', 'delivered', 'cancelled'];
+const ADMIN_STATUSES = ['placed', 'packed', 'cancelled'];
 
 const AdminOrders = () => {
   const { toast } = useToast();
@@ -30,7 +31,9 @@ const AdminOrders = () => {
       setOrders((prev) => prev.map((o) => o.id === id ? data : o));
       setView((v) => (v?.id === id ? data : v));
       toast({ title: 'Order updated' });
-    } catch { toast({ title: 'Update failed', variant: 'destructive' }); }
+    } catch (err) {
+      toast({ title: 'Update failed', description: err.response?.data?.detail, variant: 'destructive' });
+    }
   }, [toast]);
 
   const agentsById = useMemo(() => {
@@ -80,15 +83,21 @@ const AdminOrders = () => {
                   <div className={`text-[10px] uppercase font-bold ${o.payment_status === 'paid' ? 'text-green-600' : 'text-orange-600'}`}>{o.payment_status}</div>
                 </td>
                 <td className="px-4 py-3">
-                  <Select value={o.status} onValueChange={(v) => update(o.id, { status: v })}>
-                    <SelectTrigger className="h-8 w-36 text-xs"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {STATUSES.map((s) => <SelectItem key={s} value={s} className="capitalize text-xs">{s.replace('_', ' ')}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
+                  {ADMIN_STATUSES.includes(o.status) ? (
+                    <Select value={o.status} onValueChange={(v) => update(o.id, { status: v })}>
+                      <SelectTrigger className="h-8 w-36 text-xs"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {ADMIN_STATUSES.map((s) => <SelectItem key={s} value={s} className="capitalize text-xs">{s.replaceAll('_', ' ')}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <span className="inline-flex rounded-full bg-blue-50 px-2 py-1 text-xs font-semibold capitalize text-blue-700">
+                      {o.status?.replaceAll('_', ' ')}
+                    </span>
+                  )}
                 </td>
                 <td className="px-4 py-3">
-                  <Select value={o.agent_id || 'none'} onValueChange={(v) => update(o.id, { agent_id: v === 'none' ? null : v })}>
+                  <Select disabled={o.status === 'delivered' || o.status === 'cancelled'} value={o.agent_id || 'none'} onValueChange={(v) => update(o.id, { agent_id: v === 'none' ? null : v })}>
                     <SelectTrigger className="h-8 w-36 text-xs"><SelectValue placeholder="Assign" /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="none" className="text-xs">Unassigned</SelectItem>
@@ -143,6 +152,19 @@ const AdminOrders = () => {
                   ))}
                 </ul>
               </div>
+              {view.delivery_audit?.length > 0 && (
+                <div className="mt-4">
+                  <div className="font-semibold text-sm mb-2">Delivery audit</div>
+                  <div className="space-y-2 rounded border p-3 text-xs">
+                    {[...view.delivery_audit].reverse().map((entry, index) => (
+                      <div key={`${entry.at}-${index}`} className="flex justify-between gap-3 border-b pb-2 last:border-0 last:pb-0">
+                        <span className="capitalize">{entry.event?.replaceAll('_', ' ')} · {entry.actor_role}</span>
+                        <span className="text-gray-500">{new Date(entry.at).toLocaleString('en-IN')}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </>
           )}
         </DialogContent>
