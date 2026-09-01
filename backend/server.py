@@ -11,6 +11,7 @@ import csv
 import io
 import json
 import hashlib
+import hmac
 import random
 import logging
 import math
@@ -64,6 +65,7 @@ STORE_LNG = 83.3012
 DELIVERY_RADIUS_KM = 5.0
 
 BLACKSMS_API_KEY = os.environ.get("BLACKSMS_API_KEY", "").strip()
+DELIVERY_OTP_PEPPER = os.environ.get("DELIVERY_OTP_PEPPER", os.environ.get("JWT_SECRET", "")).strip()
 ENTRA_WORKFORCE_TENANT_ID = os.environ.get("ENTRA_WORKFORCE_TENANT_ID", "").strip()
 ENTRA_WORKFORCE_CLIENT_ID = os.environ.get("ENTRA_WORKFORCE_CLIENT_ID", "").strip()
 ENTRA_PROVISIONING_CLIENT_ID = os.environ.get("ENTRA_PROVISIONING_CLIENT_ID", "").strip()
@@ -158,6 +160,11 @@ class CheckoutIn(BaseModel):
 class OrderStatusUpdate(BaseModel):
     status: Optional[str] = None 
     agent_id: Optional[str] = None
+
+
+class DeliveryOtpVerifyIn(BaseModel):
+    otp: str = Field(..., pattern=r"^\d{4}$")
+    payment_collected: bool = False
 
 
 # 1. Schema validation model for individual product variants
@@ -324,8 +331,70 @@ def clean(doc):
     return doc
 
 
+def clean_order(doc):
+    doc = clean(doc)
+    if doc:
+        for key in ("delivery_otp_hash", "delivery_otp_expires_at"):
+            doc.pop(key, None)
+    return doc
+
+
 def now_iso():
     return datetime.now(timezone.utc).isoformat()
+
+
+def delivery_otp_hash(order_id: str, otp: str) -> str:
+    if not DELIVERY_OTP_PEPPER:
+        raise HTTPException(503, "Delivery OTP security is not configured")
+    return hashlib.sha256(f"{order_id}:{otp}:{DELIVERY_OTP_PEPPER}".encode()).hexdigest()
+
+
+def delivery_audit(event: str, actor_role: str, actor_id: str, **details):
+    return {
+        "event": event,
+        "actor_role": actor_role,
+        "actor_id": actor_id,
+        "at": now_iso(),
+        **details,
+    }
+
+
+async def send_blacksms_code(phone: str, code: str):
+    clean_phone = re.sub(r"\D", "", str(phone))[-10:]
+    if not re.fullmatch(r"\d{10}", clean_phone):
+        raise HTTPException(400, "Customer mobile number is invalid")
+    clean_api_key = BLACKSMS_API_KEY.replace("Bearer ", "").strip()
+    if not clean_api_key:
+        raise HTTPException(503, "BlackSMS is not configured")
+    payload = {
+        "api_key": clean_api_key,
+        "numbers": clean_phone,
+        "variables_values": code,
+        "sender_id": "520",
+        "route": "1",
+    }
+    headers = {
+        "Authorization": clean_api_key,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as sms_client:
+            response = await sms_client.post("https://blacksms.in/sms", json=payload, headers=headers)
+        if response.status_code != 200:
+            raise HTTPException(502, "BlackSMS rejected the delivery OTP request")
+        try:
+            response_data = response.json()
+        except ValueError as exc:
+            raise HTTPException(502, "BlackSMS returned an invalid response") from exc
+        if not isinstance(response_data, dict):
+            raise HTTPException(502, "BlackSMS returned an invalid response")
+        if response_data.get("status") in {"error", "failed"}:
+            raise HTTPException(502, response_data.get("message", "BlackSMS could not send the OTP"))
+    except HTTPException:
+        raise
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, "BlackSMS is temporarily unavailable") from exc
 
 
 async def get_store_hours():
@@ -1121,7 +1190,7 @@ async def rzp_verify(data: RazorpayVerifyIn, current=Depends(get_current_user)):
         )
     except Exception:
         pass
-    return clean(doc)
+    return clean_order(doc)
 
 
 @api.post("/payments/razorpay/cancel")
@@ -1296,13 +1365,13 @@ async def create_order(data: CheckoutIn, current=Depends(get_current_user)):
                 {"$inc": {"wallet_balance_paise": wallet_applied_paise}, "$pull": {"wallet_debit_ids": wallet_debit_id}},
             )
         raise
-    return clean(order)
+    return clean_order(order)
 
 
 @api.get("/orders/my")
 async def my_orders(current=Depends(get_current_user)):
     docs = await db.orders.find({"user_id": current["user_id"]}).sort("created_at", -1).to_list(200)
-    return [clean(d) for d in docs]
+    return [clean_order(d) for d in docs]
 
 
 @api.get("/orders/{oid}")
@@ -1312,7 +1381,7 @@ async def get_order(oid: str, current=Depends(get_current_user)):
         raise HTTPException(404, "Order not found")
     if current["role"] != "admin" and doc["user_id"] != current["user_id"]:
         raise HTTPException(403, "Forbidden")
-    return clean(doc)
+    return clean_order(doc)
 
 
 @api.post("/orders/{oid}/cancel")
@@ -1377,17 +1446,55 @@ async def admin_orders(status: Optional[str] = None, _=Depends(get_current_admin
     if status:
         q["status"] = status
     docs = await db.orders.find(q).sort("created_at", -1).to_list(500)
-    return [clean(d) for d in docs]
+    return [clean_order(d) for d in docs]
 
 
 @api.patch("/admin/orders/{oid}")
-async def admin_update_order(oid: str, data: OrderStatusUpdate, _=Depends(get_current_admin)):
-    update = {"status": data.status}
-    if data.agent_id is not None:
-        update["agent_id"] = data.agent_id
-    res = await db.orders.update_one({"id": oid}, {"$set": update})
-    if res.matched_count == 0:
+async def admin_update_order(oid: str, data: OrderStatusUpdate, current=Depends(get_current_admin)):
+    order = await db.orders.find_one({"id": oid})
+    if not order:
         raise HTTPException(404, "Order not found")
+    if order.get("status") == "delivered":
+        raise HTTPException(409, "A delivered order cannot be changed")
+
+    update = {}
+    audit_entries = []
+    if "agent_id" in data.__fields_set__:
+        if not data.agent_id:
+            update.update({"agent_id": None, "status": "placed"})
+            audit_entries.append(delivery_audit("unassigned", "admin", current["user_id"]))
+        else:
+            assigned_agent = await db.agents.find_one({"id": data.agent_id, "active": True})
+            if not assigned_agent:
+                raise HTTPException(400, "Select an active Agent")
+            if str(order.get("payment_method", "")).upper() != "COD" and order.get("payment_status") != "paid":
+                raise HTTPException(409, "Online payment must be confirmed before assigning this order")
+            update.update({
+                "agent_id": data.agent_id,
+                "agent_name": assigned_agent.get("name"),
+                "status": "assigned",
+                "assigned_at": now_iso(),
+            })
+            audit_entries.append(delivery_audit(
+                "assigned" if not order.get("agent_id") else "reassigned",
+                "admin", current["user_id"], agent_id=data.agent_id,
+            ))
+
+    allowed_admin_statuses = {"placed", "packed", "cancelled"}
+    if data.status is not None:
+        if data.status not in allowed_admin_statuses:
+            raise HTTPException(400, "This status is controlled by the Agent delivery workflow")
+        update["status"] = data.status
+        audit_entries.append(delivery_audit("status_changed", "admin", current["user_id"], status=data.status))
+    if not update:
+        raise HTTPException(400, "No order change supplied")
+
+    operation = {"$set": update}
+    if "agent_id" in data.__fields_set__:
+        operation["$unset"] = {"delivery_otp_hash": "", "delivery_otp_expires_at": ""}
+    if audit_entries:
+        operation["$push"] = {"delivery_audit": {"$each": audit_entries}}
+    await db.orders.update_one({"id": oid}, operation)
     doc = await db.orders.find_one({"id": oid})
     try:
         status_msg = {
@@ -1396,7 +1503,8 @@ async def admin_update_order(oid: str, data: OrderStatusUpdate, _=Depends(get_cu
             "out_for_delivery": "Your order is out for delivery!",
             "delivered": "Your order has been delivered. Enjoy!",
             "cancelled": "Your order was cancelled.",
-        }.get(data.status, f"Order status updated to {data.status}")
+            "assigned": "A delivery Agent has been assigned to your order.",
+        }.get(doc.get("status"), f"Order status updated to {doc.get('status')}")
         await push_to_user(
             doc["user_id"],
             f"BTA FreshMart • Order {doc['order_no']}",
@@ -1405,7 +1513,7 @@ async def admin_update_order(oid: str, data: OrderStatusUpdate, _=Depends(get_cu
         )
     except Exception as e:
         logging.warning(f"push_to_user failed: {e}")
-    return clean(doc)
+    return clean_order(doc)
 
 
 @api.post("/admin/products")
@@ -2061,7 +2169,7 @@ async def agent_orders(current=Depends(get_current_user)):
     docs = await db.orders.find({
         "agent_id": current["user_id"]
     }).sort("created_at", -1).to_list(200)
-    return [clean(d) for d in docs]
+    return [clean_order(d) for d in docs]
 
 
 @api.patch("/agent/orders/{oid}")
@@ -2078,15 +2186,152 @@ async def agent_update_order(
     })
     if not order:
         raise HTTPException(404, "Assigned order not found")
-    allowed_status = ["packed", "out_for_delivery", "delivered"]
-    if data.status not in allowed_status:
-        raise HTTPException(400, "Invalid status for agent")
-    await db.orders.update_one(
-        {"id": oid},
-        {"$set": {"status": data.status}}
+    transitions = {
+        "assigned": "accepted",
+        "accepted": "picked_up",
+        "packed": "picked_up",
+        "picked_up": "out_for_delivery",
+    }
+    expected = transitions.get(order.get("status"))
+    if data.status != expected:
+        if order.get("status") == "delivered":
+            raise HTTPException(409, "Delivered orders cannot be reopened")
+        raise HTTPException(409, f"Next permitted status is {expected or 'not available'}")
+    timestamp_field = {
+        "accepted": "accepted_at",
+        "picked_up": "picked_up_at",
+        "out_for_delivery": "out_for_delivery_at",
+    }[data.status]
+    changed = await db.orders.update_one(
+        {"id": oid, "status": order.get("status")},
+        {
+            "$set": {"status": data.status, timestamp_field: now_iso()},
+            "$push": {"delivery_audit": delivery_audit(
+                data.status, "agent", current["user_id"]
+            )},
+        },
     )
+    if not changed.modified_count:
+        raise HTTPException(409, "Order status changed; refresh and try again")
     updated = await db.orders.find_one({"id": oid})
-    return clean(updated)
+    if data.status == "out_for_delivery":
+        try:
+            await push_to_user(
+                updated["user_id"], f"BTA FreshMart • Order {updated['order_no']}",
+                "Your order is out for delivery. Share the delivery OTP only after receiving it.",
+                url="/orders",
+            )
+        except Exception as exc:
+            logging.warning("Out-for-delivery push failed: %s", exc)
+    return clean_order(updated)
+
+
+@api.post("/agent/orders/{oid}/delivery-otp")
+async def agent_send_delivery_otp(oid: str, current=Depends(get_current_user)):
+    if current["role"] != "agent":
+        raise HTTPException(403, "Agent access required")
+    order = await db.orders.find_one({"id": oid, "agent_id": current["user_id"]})
+    if not order:
+        raise HTTPException(404, "Assigned order not found")
+    if order.get("status") != "out_for_delivery":
+        raise HTTPException(409, "OTP is available only when the order is out for delivery")
+
+    now = datetime.now(timezone.utc)
+    last_sent = order.get("delivery_otp_sent_at")
+    if isinstance(last_sent, datetime):
+        last_sent = last_sent.replace(tzinfo=last_sent.tzinfo or timezone.utc)
+        retry_after = 60 - int((now - last_sent).total_seconds())
+        if retry_after > 0:
+            raise HTTPException(429, f"Wait {retry_after} seconds before resending")
+    today = now.date().isoformat()
+    daily_count = int(order.get("delivery_otp_daily_count", 0)) if order.get("delivery_otp_daily_date") == today else 0
+    if daily_count >= 5:
+        raise HTTPException(429, "Daily delivery OTP limit reached for this order")
+
+    otp = f"{random.SystemRandom().randint(1000, 9999)}"
+    await send_blacksms_code(order.get("address", {}).get("phone", ""), otp)
+    expires_at = now + timedelta(minutes=10)
+    await db.orders.update_one(
+        {"id": oid, "agent_id": current["user_id"], "status": "out_for_delivery"},
+        {
+            "$set": {
+                "delivery_otp_hash": delivery_otp_hash(oid, otp),
+                "delivery_otp_expires_at": expires_at,
+                "delivery_otp_attempts": 0,
+                "delivery_otp_sent_at": now,
+                "delivery_otp_daily_date": today,
+                "delivery_otp_daily_count": daily_count + 1,
+            },
+            "$push": {"delivery_audit": delivery_audit("otp_sent", "agent", current["user_id"])},
+        },
+    )
+    return {"ok": True, "expires_in_seconds": 600, "resend_after_seconds": 60}
+
+
+@api.post("/agent/orders/{oid}/verify-delivery-otp")
+async def agent_verify_delivery_otp(
+    oid: str, data: DeliveryOtpVerifyIn, current=Depends(get_current_user)
+):
+    if current["role"] != "agent":
+        raise HTTPException(403, "Agent access required")
+    order = await db.orders.find_one({"id": oid, "agent_id": current["user_id"]})
+    if not order:
+        raise HTTPException(404, "Assigned order not found")
+    if order.get("status") != "out_for_delivery":
+        raise HTTPException(409, "Order is not awaiting delivery verification")
+    if not order.get("delivery_otp_hash"):
+        raise HTTPException(409, "Send a delivery OTP first")
+    attempts = int(order.get("delivery_otp_attempts", 0))
+    if attempts >= 5:
+        raise HTTPException(423, "Too many incorrect attempts. Send a new OTP")
+    expires_at = order.get("delivery_otp_expires_at")
+    if not isinstance(expires_at, datetime):
+        raise HTTPException(410, "Delivery OTP has expired")
+    expires_at = expires_at.replace(tzinfo=expires_at.tzinfo or timezone.utc)
+    if datetime.now(timezone.utc) > expires_at:
+        raise HTTPException(410, "Delivery OTP has expired")
+    if not hmac.compare_digest(order["delivery_otp_hash"], delivery_otp_hash(oid, data.otp)):
+        await db.orders.update_one(
+            {"id": oid},
+            {
+                "$inc": {"delivery_otp_attempts": 1},
+                "$push": {"delivery_audit": delivery_audit(
+                    "otp_failed", "agent", current["user_id"], attempt=attempts + 1
+                )},
+            },
+        )
+        raise HTTPException(401, f"Incorrect OTP. {4 - attempts} attempts remaining")
+
+    is_cod = str(order.get("payment_method", "")).upper() == "COD"
+    if is_cod and not data.payment_collected:
+        raise HTTPException(400, "Confirm COD cash collection before completing delivery")
+    if not is_cod and order.get("payment_status") != "paid":
+        raise HTTPException(409, "Online payment is not confirmed")
+
+    delivered_at = now_iso()
+    set_values = {"status": "delivered", "delivered_at": delivered_at}
+    if is_cod:
+        set_values.update({"payment_status": "paid", "payment_collected_at": delivered_at})
+    result = await db.orders.update_one(
+        {"id": oid, "agent_id": current["user_id"], "status": "out_for_delivery"},
+        {
+            "$set": set_values,
+            "$unset": {"delivery_otp_hash": "", "delivery_otp_expires_at": ""},
+            "$push": {"delivery_audit": delivery_audit(
+                "delivered", "agent", current["user_id"], payment_method=order.get("payment_method")
+            )},
+        },
+    )
+    if not result.modified_count:
+        raise HTTPException(409, "Order status changed; refresh and try again")
+    try:
+        await push_to_user(
+            order["user_id"], f"BTA FreshMart • Order {order['order_no']}",
+            "Delivery verified successfully. Thank you for shopping with us!", url="/orders",
+        )
+    except Exception as exc:
+        logging.warning("Delivered push failed: %s", exc)
+    return clean_order(await db.orders.find_one({"id": oid}))
 
 
 @api.get("/orders/{order_id}")
@@ -2094,7 +2339,7 @@ async def get_order_by_id(order_id: str):
     order = await db.orders.find_one({"$or": [{"id": order_id}, {"order_no": order_id}]})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
-    return clean(order)
+    return clean_order(order)
 
 
 @api.get("/")
