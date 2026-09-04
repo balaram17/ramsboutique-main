@@ -115,7 +115,10 @@ const AdminProducts = () => {
           unit: String(v.unit).trim(),
           price: Number(v.price) || 0,
           mrp: Number(v.mrp) || 0,
-          stock: Number(v.stock) || 0
+          stock: Number(v.stock) || 0,
+          image: v.image || '',
+          sku_id: v.sku_id || '',
+          default: !!v.default,
         }))
       };
       
