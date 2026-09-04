@@ -19,10 +19,8 @@ const ProductDetail = () => {
   useEffect(() => { 
     api.get(`/products/${id}`).then((r) => {
       setP(r.data);
-      // Automatically default to the first variant if available
-      if (r.data.variants && r.data.variants.length > 0) {
-        setSelectedVariant(r.data.variants[0]);
-      }
+      const variants = r.data.variants || [];
+      setSelectedVariant(variants.find((v) => v.default) || variants[0] || null);
     }); 
   }, [id]);
 
@@ -32,6 +30,7 @@ const ProductDetail = () => {
   const currentUnit = selectedVariant ? selectedVariant.unit : p.unit;
   const currentPrice = selectedVariant ? selectedVariant.price : p.price;
   const currentMrp = selectedVariant ? selectedVariant.mrp : p.mrp;
+  const currentImage = (selectedVariant && selectedVariant.image) || p.image;
   const step = quantityStep({ unit: currentUnit });
   const shownPrice = currentPrice * step;
   const shownMrp = currentMrp * step;
@@ -52,6 +51,7 @@ const ProductDetail = () => {
       unit: currentUnit,
       price: currentPrice,
       mrp: currentMrp,
+      image: currentImage,
       isVariant: !!selectedVariant
     };
     add(customProductPayload);
@@ -64,7 +64,7 @@ const ProductDetail = () => {
       </div>
       <div className="grid md:grid-cols-2 gap-8">
         <div className="bg-white rounded-lg overflow-hidden border border-gray-200">
-          <img src={p.image} alt={p.name} className="w-full aspect-square object-cover" />
+          <img src={currentImage} alt={p.name} className="w-full aspect-square object-cover" />
         </div>
         <div>
           <div className="text-xs text-gray-500 uppercase tracking-wide">{p.brand}</div>
@@ -81,7 +81,7 @@ const ProductDetail = () => {
           {/* Dynamic Interactive Variants Selector Buttons */}
           {p.variants && p.variants.length > 0 && (
             <div className="mt-6">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500 mb-2">Select Variant Option:</h3>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500 mb-2">Select Quantity</h3>
               <div className="flex flex-wrap gap-2">
                 {p.variants.map((v, i) => {
                   const isSelected = selectedVariant?.unit === v.unit;

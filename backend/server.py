@@ -34,7 +34,15 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 from chits import router as chits_router, seed_chit_data, start_chit_scheduler, stop_chit_scheduler
 from catalog_sync import inspect_source, proposed_update
-from dmart_sync import DMART_CATEGORIES, DMART_PINCODE, sync_categories
+from dmart_sync import (
+    DMART_CATEGORIES,
+    DMART_PINCODE,
+    collapse_existing_sku_products,
+    group_csv_rows,
+    hide_legacy_sku_products,
+    rams_slug,
+    sync_categories,
+)
 from entra_provisioning import EntraAgentProvisioner, EntraProvisioningError
 
 mongo_url = os.environ["MONGO_URL"]
@@ -173,6 +181,9 @@ class VariantItem(BaseModel):
     price: float
     mrp: float
     stock: int = 100
+    image: Optional[str] = ""
+    sku_id: Optional[str] = ""
+    default: bool = False
 
 
 # 2. Embedded the variants array into your product input schema
@@ -1761,7 +1772,8 @@ async def admin_import_dmart_csv(payload: DmartCsvImportIn, _=Depends(get_curren
             if mrp <= 0:
                 raise ValueError("MRP must be greater than zero")
             prepared.append((token, sku_id, name, mrp, row))
-            seen_by_category.setdefault(token, set()).add(sku_id)
+            product_id = (row.get("product_id") or "").strip() or sku_id
+            seen_by_category.setdefault(token, set()).add(product_id)
         except Exception as exc:
             errors.append(f"Row {line_no}: {exc}")
     if errors:
@@ -1780,7 +1792,7 @@ async def admin_import_dmart_csv(payload: DmartCsvImportIn, _=Depends(get_curren
 
     # Create each selected storefront category once, not once per product.
     for token in seen_by_category:
-        category_slug = "dmart-" + re.sub(r"[^a-z0-9]+", "-", token.lower()).strip("-")
+        category_slug = rams_slug(token)
         await cosmos_write(lambda token=token, category_slug=category_slug: db.categories.update_one(
             {"slug": category_slug},
             {"$setOnInsert": {"id": category_slug, "slug": category_slug, "name": known[token], "icon": "shopping-basket", "order": 100, "active": True}},
@@ -1789,25 +1801,9 @@ async def admin_import_dmart_csv(payload: DmartCsvImportIn, _=Depends(get_curren
 
     added = updated = hidden = 0
     operation_errors = []
-    for token, sku_id, name, mrp, row in prepared:
+    for values in group_csv_rows(prepared, known):
         try:
-            category_slug = "dmart-" + re.sub(r"[^a-z0-9]+", "-", token.lower()).strip("-")
-            source_key = f"dmart:{sku_id}"
-            values = {
-                "source_market": "dmart", "source_key": source_key,
-                "source_product_id": (row.get("product_id") or "").strip(), "source_sku_id": sku_id,
-                "source_category_token": token, "source_pincode": DMART_PINCODE,
-                "source_category_l1": (row.get("category_l1") or "").strip(),
-                "source_category_l2": (row.get("category_l2") or "").strip(),
-                "source_category_l3": (row.get("category_l3") or "").strip(),
-                "name": name, "brand": (row.get("brand") or "DMart").strip(),
-                "category": category_slug, "sub": (row.get("category_l2") or known[token]).strip(),
-                "price": mrp, "mrp": mrp, "unit": (row.get("unit") or "piece").strip(),
-                "image": (row.get("image_url") or "").strip(), "desc": "", "stock": 100, "variants": [],
-                "source_url": (row.get("source_url") or "").strip(), "auto_update_price": True,
-                "auto_update_mrp": True, "auto_update_image": True, "active": True,
-                "inactive_reason": None, "source_checked_at": now_iso(), "source_status": "ok", "updated_at": now_iso(),
-            }
+            source_key = values["source_key"]
             result = await cosmos_write(lambda source_key=source_key, values=values: db.products.update_one(
                 {"source_key": source_key},
                 {"$set": values, "$setOnInsert": {"id": source_key, "created_at": now_iso()}}, upsert=True,
@@ -1816,15 +1812,17 @@ async def admin_import_dmart_csv(payload: DmartCsvImportIn, _=Depends(get_curren
             else: updated += 1
             await asyncio.sleep(0.06)
         except Exception as exc:
-            operation_errors.append(f"{name}: {str(exc)[:250]}")
+            operation_errors.append(f"{values.get('name')}: {str(exc)[:250]}")
 
     for token, seen in seen_by_category.items():
         result = await cosmos_write(lambda token=token, seen=seen: db.products.update_many(
             {"source_market": "dmart", "source_category_token": token,
-             "source_sku_id": {"$nin": list(seen)}, "active": {"$ne": False}},
+             "source_kind": "parent",
+             "source_product_id": {"$nin": list(seen)}, "active": {"$ne": False}},
             {"$set": {"active": False, "inactive_reason": "missing_from_dmart_csv", "updated_at": now_iso()}},
         ))
         hidden += result.modified_count
+        hidden += await cosmos_write(lambda token=token: hide_legacy_sku_products(db, token))
         await cosmos_write(lambda token=token, seen=seen: db.dmart_categories.update_one(
             {"token": token}, {"$set": {"last_synced_at": now_iso(), "last_error": None, "total_records": len(seen)}},
         ))
@@ -1878,9 +1876,22 @@ async def admin_dmart_sync_status(job_id: str, _=Depends(get_current_admin)):
     return clean(job)
 
 
+@api.post("/admin/dmart/merge-variants")
+async def admin_merge_dmart_variants(_=Depends(get_current_admin)):
+    """Collapse already-imported DMart SKUs into parent products with pack-size variants."""
+    result = await collapse_existing_sku_products(db)
+    await create_admin_notification(
+        "DMart pack sizes merged into variants",
+        f"Created {result['added']} products, updated {result['updated']}, hid {result['hidden']} old SKU listings.",
+    )
+    return result
+
+
 @api.get("/admin/dmart/export.csv")
 async def admin_export_dmart_csv(_=Depends(get_current_admin)):
-    docs = await db.products.find({"source_market": "dmart"}).to_list(50000)
+    docs = await db.products.find({"source_market": "dmart", "source_kind": "parent"}).to_list(50000)
+    if not docs:
+        docs = await db.products.find({"source_market": "dmart"}).to_list(50000)
     docs = [doc for doc in docs if not str(doc.get("name") or "").strip().casefold().startswith("dmart")]
     docs.sort(key=lambda item: (item.get("source_category_l1", ""), item.get("name", "")))
     columns = [
@@ -1892,20 +1903,33 @@ async def admin_export_dmart_csv(_=Depends(get_current_admin)):
     writer = csv.DictWriter(output, fieldnames=columns)
     writer.writeheader()
     for doc in docs:
-        writer.writerow({
-            "source_category_token": doc.get("source_category_token", ""),
-            "source_category_l1": doc.get("source_category_l1", ""),
-            "source_category_l2": doc.get("source_category_l2", ""),
-            "source_category_l3": doc.get("source_category_l3", ""),
-            "source_product_id": doc.get("source_product_id", ""),
-            "source_sku_id": doc.get("source_sku_id", ""),
-            "name": doc.get("name", ""), "brand": doc.get("brand", ""), "unit": doc.get("unit", ""),
-            "mrp": doc.get("mrp", 0), "price": doc.get("mrp", 0),
-            "image_url": doc.get("image", ""), "source_url": doc.get("source_url", ""),
-            "active": doc.get("active", True), "inactive_reason": doc.get("inactive_reason") or "",
-            "source_pincode": doc.get("source_pincode", DMART_PINCODE),
-            "last_synced_at": doc.get("source_checked_at", ""),
-        })
+        variants = doc.get("variants") or []
+        if not variants:
+            variants = [{
+                "sku_id": doc.get("source_sku_id", ""),
+                "unit": doc.get("unit", ""),
+                "mrp": doc.get("mrp", 0),
+                "price": doc.get("mrp", 0),
+                "image": doc.get("image", ""),
+            }]
+        for variant in variants:
+            writer.writerow({
+                "source_category_token": doc.get("source_category_token", ""),
+                "source_category_l1": doc.get("source_category_l1", ""),
+                "source_category_l2": doc.get("source_category_l2", ""),
+                "source_category_l3": doc.get("source_category_l3", ""),
+                "source_product_id": doc.get("source_product_id", ""),
+                "source_sku_id": variant.get("sku_id") or doc.get("source_sku_id", ""),
+                "name": doc.get("name", ""), "brand": doc.get("brand", ""),
+                "unit": variant.get("unit") or doc.get("unit", ""),
+                "mrp": variant.get("mrp", doc.get("mrp", 0)),
+                "price": variant.get("price", variant.get("mrp", doc.get("mrp", 0))),
+                "image_url": variant.get("image") or doc.get("image", ""),
+                "source_url": doc.get("source_url", ""),
+                "active": doc.get("active", True), "inactive_reason": doc.get("inactive_reason") or "",
+                "source_pincode": doc.get("source_pincode", DMART_PINCODE),
+                "last_synced_at": doc.get("source_checked_at", ""),
+            })
     return Response(
         content="\ufeff" + output.getvalue(), media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": "attachment; filename=dmart-live-products.csv"},

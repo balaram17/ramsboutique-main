@@ -1,9 +1,13 @@
 """DMart Ready catalogue import helpers.
 
 Only the public MRP field is used. DMart's selling price is intentionally ignored.
+
+DMart returns one parent product with multiple SKUs (pack sizes). Those SKUs are
+stored as variants on a single Rams Boutique product instead of separate listings.
 """
 import asyncio
 import re
+from collections import defaultdict
 from datetime import datetime, timezone
 
 import httpx
@@ -12,6 +16,8 @@ DMART_API = "https://digital.dmart.in/api/v3/plp"
 DMART_WEB = "https://www.dmart.in"
 DMART_CDN = "https://cdn.dmart.in"
 DMART_PINCODE = "530016"
+PARENT_KEY_PREFIX = "dmart:p:"
+LEGACY_MERGED_REASON = "merged_into_parent_variants"
 
 DMART_CATEGORIES = [
     ("aesc--footwear", "Footwear"),
@@ -38,6 +44,12 @@ DMART_CATEGORIES = [
     ("trolley-bags-handbags-more", "Trolley Bags, Handbags & More"),
 ]
 
+_UNIT_SUFFIX = re.compile(
+    r"\s*[:\-–]\s*[\d.]+\s*(kg|kgs|g|gm|gms|l|ltr|lt|ml|pcs?|pieces?)\s*$",
+    re.I,
+)
+_UNIT_AMOUNT = re.compile(r"([\d.]+)\s*(kg|kgs|g|gm|gms|l|ltr|lt|ml|pcs?|pieces?)?", re.I)
+
 
 def now_iso():
     return datetime.now(timezone.utc).isoformat()
@@ -47,6 +59,32 @@ def rams_slug(token):
     return "dmart-" + re.sub(r"[^a-z0-9]+", "-", token.lower()).strip("-")
 
 
+def parent_source_key(product_id):
+    return f"{PARENT_KEY_PREFIX}{product_id}"
+
+
+def is_parent_key(source_key):
+    return str(source_key or "").startswith(PARENT_KEY_PREFIX)
+
+
+def is_own_label(name):
+    return str(name or "").strip().casefold().startswith("dmart")
+
+
+def parse_mrp(value):
+    try:
+        mrp = round(float(value or 0), 2)
+    except (TypeError, ValueError):
+        return 0.0
+    return mrp if mrp > 0 else 0.0
+
+
+def clean_parent_name(name):
+    text = str(name or "").strip()
+    cleaned = _UNIT_SUFFIX.sub("", text).strip(" :-–")
+    return cleaned or text
+
+
 def image_url(sku):
     key = str(sku.get("productImageKey") or "").strip("/")
     code = str(sku.get("imgCode") or "").strip()
@@ -54,6 +92,293 @@ def image_url(sku):
         return ""
     # DMart's product cards use productImageKey_imgCode_size.jpg (P = medium).
     return f"{DMART_CDN}/images/products/{key}_{code}_P.jpg" if code else ""
+
+
+def is_default_sku(sku):
+    flag = str(sku.get("defaultVariant") if isinstance(sku, dict) else "").strip().upper()
+    if isinstance(sku, dict) and sku.get("default") is True:
+        return True
+    return flag in {"Y", "TRUE", "1"}
+
+
+def unit_sort_key(unit):
+    text = str(unit or "").strip().lower()
+    match = _UNIT_AMOUNT.search(text.replace(" ", "")) or _UNIT_AMOUNT.search(text)
+    if not match:
+        return (99, 0.0, text)
+    amount = float(match.group(1))
+    suffix = (match.group(2) or "").lower()
+    millilitres = amount
+    if suffix in {"kg", "kgs", "l", "ltr", "lt"}:
+        millilitres = amount * 1000
+    elif suffix in {"g", "gm", "gms", "ml"}:
+        millilitres = amount
+    elif suffix in {"pc", "pcs", "piece", "pieces"}:
+        millilitres = amount
+    return (0, millilitres, text)
+
+
+def unique_variant_units(variants):
+    seen = set()
+    out = []
+    for variant in variants:
+        unit = str(variant.get("unit") or "piece").strip() or "piece"
+        if unit in seen:
+            sku_id = str(variant.get("sku_id") or "").strip()
+            unit = f"{unit} ({sku_id})" if sku_id else f"{unit} ({len(seen) + 1})"
+        seen.add(unit)
+        out.append({**variant, "unit": unit})
+    return out
+
+
+def sku_row_from_dmart(sku):
+    sku_id = str(sku.get("skuUniqueID") or "").strip()
+    name = str(sku.get("name") or "").strip()
+    return {
+        "sku_id": sku_id,
+        "name": name,
+        "unit": str(sku.get("variantTextValue") or "piece").strip() or "piece",
+        "mrp": parse_mrp(sku.get("priceMRP")),
+        "image": image_url(sku),
+        "stock": int(float(sku.get("maxQuantity") or 100)),
+        "default": is_default_sku(sku),
+    }
+
+
+def sku_row_from_csv(row, sku_id, name, mrp):
+    return {
+        "sku_id": sku_id,
+        "name": name,
+        "unit": str(row.get("unit") or "piece").strip() or "piece",
+        "mrp": mrp,
+        "image": str(row.get("image_url") or "").strip(),
+        "stock": 100,
+        "default": False,
+    }
+
+
+def sku_row_from_existing(doc):
+    variants = doc.get("variants") or []
+    if variants:
+        rows = []
+        for variant in variants:
+            sku_id = str(variant.get("sku_id") or doc.get("source_sku_id") or "").strip()
+            rows.append({
+                "sku_id": sku_id,
+                "name": doc.get("name") or "",
+                "unit": str(variant.get("unit") or doc.get("unit") or "piece").strip() or "piece",
+                "mrp": parse_mrp(variant.get("mrp") or variant.get("price") or doc.get("mrp")),
+                "image": str(variant.get("image") or doc.get("image") or "").strip(),
+                "stock": int(float(variant.get("stock") or doc.get("stock") or 100)),
+                "default": bool(variant.get("default")),
+            })
+        return rows
+    return [{
+        "sku_id": str(doc.get("source_sku_id") or "").strip(),
+        "name": doc.get("name") or "",
+        "unit": str(doc.get("unit") or "piece").strip() or "piece",
+        "mrp": parse_mrp(doc.get("mrp") or doc.get("price")),
+        "image": str(doc.get("image") or "").strip(),
+        "stock": int(float(doc.get("stock") or 100)),
+        "default": True,
+    }]
+
+
+def build_parent_from_sku_rows(
+    *,
+    product_id,
+    parent_name,
+    brand,
+    token,
+    category_name,
+    category_slug,
+    category_map,
+    source_url,
+    sku_rows,
+):
+    product_id = str(product_id or "").strip()
+    if not product_id:
+        return None
+    variants = []
+    for row in sku_rows:
+        sku_id = str(row.get("sku_id") or "").strip()
+        name = str(row.get("name") or parent_name or "").strip()
+        if not sku_id:
+            continue
+        if is_own_label(name) or is_own_label(parent_name):
+            continue
+        mrp = parse_mrp(row.get("mrp"))
+        if mrp <= 0:
+            continue
+        variants.append({
+            "unit": str(row.get("unit") or "piece").strip() or "piece",
+            "price": mrp,
+            "mrp": mrp,
+            "stock": int(float(row.get("stock") or 100)),
+            "image": str(row.get("image") or "").strip(),
+            "sku_id": sku_id,
+            "default": bool(row.get("default")),
+        })
+    if not variants:
+        return None
+
+    variants = unique_variant_units(variants)
+    variants.sort(key=lambda item: unit_sort_key(item["unit"]))
+    default = next((item for item in variants if item.get("default")), variants[0])
+    for item in variants:
+        item["default"] = item is default
+
+    display_name = clean_parent_name(parent_name) or clean_parent_name(sku_rows[0].get("name"))
+    sku_ids = [item["sku_id"] for item in variants]
+    return {
+        "source_market": "dmart",
+        "source_kind": "parent",
+        "source_key": parent_source_key(product_id),
+        "source_product_id": product_id,
+        "source_sku_id": default["sku_id"],
+        "source_sku_ids": sku_ids,
+        "source_category_token": token,
+        "source_pincode": DMART_PINCODE,
+        "source_category_l1": (category_map or {}).get("L1", ""),
+        "source_category_l2": (category_map or {}).get("L2", ""),
+        "source_category_l3": (category_map or {}).get("L3", ""),
+        "name": display_name,
+        "brand": str(brand or "DMart").strip() or "DMart",
+        "category": category_slug,
+        "sub": (category_map or {}).get("L2") or category_name,
+        "price": default["price"],
+        "mrp": default["mrp"],
+        "unit": default["unit"],
+        "image": default["image"] or next((item["image"] for item in variants if item.get("image")), ""),
+        "desc": "",
+        "stock": default["stock"],
+        "variants": variants,
+        "source_url": source_url or "",
+        "auto_update_price": True,
+        "auto_update_mrp": True,
+        "auto_update_image": True,
+        "active": True,
+        "inactive_reason": None,
+        "source_checked_at": now_iso(),
+        "source_status": "ok",
+        "updated_at": now_iso(),
+    }
+
+
+def group_csv_rows(prepared_rows, known_categories):
+    """Group CSV SKU rows by (category token, DMart product id)."""
+    groups = {}
+    for token, sku_id, name, mrp, row in prepared_rows:
+        product_id = str(row.get("product_id") or "").strip() or sku_id
+        bucket = groups.setdefault((token, product_id), {"meta": row, "rows": []})
+        bucket["rows"].append(sku_row_from_csv(row, sku_id, name, mrp))
+    parents = []
+    for (token, product_id), bucket in groups.items():
+        row = bucket["meta"]
+        sku_rows = bucket["rows"]
+        parent = build_parent_from_sku_rows(
+            product_id=product_id,
+            parent_name=str(row.get("name") or sku_rows[0]["name"]),
+            brand=str(row.get("brand") or "DMart"),
+            token=token,
+            category_name=known_categories.get(token, token),
+            category_slug=rams_slug(token),
+            category_map={
+                "L1": str(row.get("category_l1") or "").strip(),
+                "L2": str(row.get("category_l2") or "").strip(),
+                "L3": str(row.get("category_l3") or "").strip(),
+            },
+            source_url=str(row.get("source_url") or "").strip(),
+            sku_rows=sku_rows,
+        )
+        if parent:
+            parents.append(parent)
+    return parents
+
+
+async def hide_legacy_sku_products(db, token=None):
+    query = {
+        "source_market": "dmart",
+        "source_kind": {"$ne": "parent"},
+        "active": {"$ne": False},
+    }
+    if token:
+        query["source_category_token"] = token
+    result = await db.products.update_many(
+        query,
+        {"$set": {
+            "active": False,
+            "inactive_reason": LEGACY_MERGED_REASON,
+            "updated_at": now_iso(),
+        }},
+    )
+    return result.modified_count
+
+
+async def collapse_existing_sku_products(db):
+    """Merge already-imported per-SKU DMart rows into parent products with variants."""
+    legacy = await db.products.find({
+        "source_market": "dmart",
+        "source_kind": {"$ne": "parent"},
+    }).to_list(50000)
+    groups = defaultdict(list)
+    skipped = 0
+    for doc in legacy:
+        product_id = str(doc.get("source_product_id") or "").strip()
+        if not product_id:
+            skipped += 1
+            continue
+        groups[product_id].append(doc)
+
+    added = updated = hidden = 0
+    for product_id, docs in groups.items():
+        sku_rows = []
+        for doc in docs:
+            sku_rows.extend(sku_row_from_existing(doc))
+        sample = docs[0]
+        parent = build_parent_from_sku_rows(
+            product_id=product_id,
+            parent_name=sample.get("name") or "",
+            brand=sample.get("brand") or "DMart",
+            token=sample.get("source_category_token") or "",
+            category_name=sample.get("sub") or "",
+            category_slug=sample.get("category") or rams_slug(sample.get("source_category_token") or "groceries"),
+            category_map={
+                "L1": sample.get("source_category_l1") or "",
+                "L2": sample.get("source_category_l2") or "",
+                "L3": sample.get("source_category_l3") or "",
+            },
+            source_url=sample.get("source_url") or "",
+            sku_rows=sku_rows,
+        )
+        if not parent:
+            continue
+        source_key = parent["source_key"]
+        existing = await db.products.find_one({"source_key": source_key}, {"_id": 1})
+        await db.products.update_one(
+            {"source_key": source_key},
+            {"$set": parent, "$setOnInsert": {"id": source_key, "created_at": now_iso()}},
+            upsert=True,
+        )
+        if existing:
+            updated += 1
+        else:
+            added += 1
+        hide_ids = [doc.get("id") for doc in docs if doc.get("id") and doc.get("id") != source_key]
+        if hide_ids:
+            result = await db.products.update_many(
+                {"id": {"$in": hide_ids}},
+                {"$set": {
+                    "active": False,
+                    "inactive_reason": LEGACY_MERGED_REASON,
+                    "updated_at": now_iso(),
+                }},
+            )
+            hidden += result.modified_count
+        await asyncio.sleep(0.02)
+    leftover = await hide_legacy_sku_products(db)
+    hidden += leftover
+    return {"added": added, "updated": updated, "hidden": hidden, "skipped": skipped, "groups": len(groups)}
 
 
 async def fetch_page(client, token, page, size=100):
@@ -96,7 +421,7 @@ async def sync_categories(db, tokens, job_id, notify):
     async with httpx.AsyncClient(timeout=30, follow_redirects=True, headers=headers) as client:
         for category_index, token in enumerate(tokens, start=1):
             category_name = known[token]
-            seen = set()
+            seen_product_ids = set()
             try:
                 first = await fetch_page(client, token, 1)
                 total_records = int(first.get("totalRecords") or 0)
@@ -118,65 +443,61 @@ async def sync_categories(db, tokens, job_id, notify):
 
                 for payload in page_payloads:
                     for product in payload.get("products", []):
+                        product_id = str(product.get("productId") or "").strip()
+                        parent_name = str(product.get("name") or "").strip()
+                        if not product_id:
+                            continue
+                        if is_own_label(parent_name):
+                            continue
                         category_map = {x.get("level"): x.get("name", "") for x in product.get("categoryMap", [])}
+                        sku_rows = []
                         for sku in product.get("sKUs", []):
-                            sku_id = str(sku.get("skuUniqueID") or "").strip()
-                            if not sku_id:
+                            row = sku_row_from_dmart(sku)
+                            if not row["sku_id"]:
                                 continue
-                            product_name = str(sku.get("name") or product.get("name") or "").strip()
-                            # BTA FreshMart must not list DMart's own-label items.
-                            if product_name.casefold().startswith("dmart"):
+                            if is_own_label(row["name"]):
                                 continue
-                            try:
-                                mrp = round(float(sku.get("priceMRP") or 0), 2)
-                            except (TypeError, ValueError):
-                                mrp = 0
-                            if mrp <= 0:
-                                errors.append(f"{category_name}: {sku.get('name') or sku_id} has no valid MRP")
+                            if row["mrp"] <= 0:
+                                errors.append(f"{category_name}: {row['name'] or row['sku_id']} has no valid MRP")
                                 continue
-                            seen.add(sku_id)
-                            total_skus += 1
-                            source_key = f"dmart:{sku_id}"
-                            existing = await db.products.find_one({"source_key": source_key}, {"_id": 1})
-                            values = {
-                                "source_market": "dmart", "source_key": source_key,
-                                "source_product_id": str(product.get("productId") or ""),
-                                "source_sku_id": sku_id, "source_category_token": token,
-                                "source_pincode": DMART_PINCODE,
-                                "name": product_name,
-                                "brand": str(product.get("manufacturer") or "DMart").strip(),
-                                "category": category_slug, "sub": category_map.get("L2") or category_name,
-                                "source_category_l1": category_map.get("L1", ""),
-                                "source_category_l2": category_map.get("L2", ""),
-                                "source_category_l3": category_map.get("L3", ""),
-                                # User requirement: Rams price and MRP both use DMart's priceMRP.
-                                "price": mrp, "mrp": mrp,
-                                "unit": str(sku.get("variantTextValue") or "piece").strip(),
-                                "image": image_url(sku), "desc": "",
-                                "stock": int(float(sku.get("maxQuantity") or 100)), "variants": [],
-                                "source_url": f"{DMART_WEB}{product.get('targetUrl') or '/'}",
-                                "auto_update_price": True, "auto_update_mrp": True,
-                                "auto_update_image": True, "active": True,
-                                "inactive_reason": None, "source_checked_at": now_iso(),
-                                "source_status": "ok", "updated_at": now_iso(),
-                            }
-                            await db.products.update_one(
-                                {"source_key": source_key},
-                                {"$set": values, "$setOnInsert": {"id": source_key, "created_at": now_iso()}},
-                                upsert=True,
-                            )
-                            if existing:
-                                total_updated += 1
-                            else:
-                                total_added += 1
-                            await asyncio.sleep(0.025)
+                            sku_rows.append(row)
+                        values = build_parent_from_sku_rows(
+                            product_id=product_id,
+                            parent_name=parent_name,
+                            brand=str(product.get("manufacturer") or "DMart").strip(),
+                            token=token,
+                            category_name=category_name,
+                            category_slug=category_slug,
+                            category_map=category_map,
+                            source_url=f"{DMART_WEB}{product.get('targetUrl') or '/'}",
+                            sku_rows=sku_rows,
+                        )
+                        if not values:
+                            continue
+                        seen_product_ids.add(product_id)
+                        total_skus += len(values.get("source_sku_ids") or [])
+                        source_key = values["source_key"]
+                        existing = await db.products.find_one({"source_key": source_key}, {"_id": 1})
+                        await db.products.update_one(
+                            {"source_key": source_key},
+                            {"$set": values, "$setOnInsert": {"id": source_key, "created_at": now_iso()}},
+                            upsert=True,
+                        )
+                        if existing:
+                            total_updated += 1
+                        else:
+                            total_added += 1
+                        await asyncio.sleep(0.025)
 
                 hide_result = await db.products.update_many(
                     {"source_market": "dmart", "source_category_token": token,
-                     "source_sku_id": {"$nin": list(seen)}, "active": {"$ne": False}},
+                     "source_kind": "parent",
+                     "source_product_id": {"$nin": list(seen_product_ids)},
+                     "active": {"$ne": False}},
                     {"$set": {"active": False, "inactive_reason": "missing_from_dmart", "updated_at": now_iso()}},
                 )
                 total_hidden += hide_result.modified_count
+                total_hidden += await hide_legacy_sku_products(db, token)
                 await db.dmart_categories.update_one(
                     {"token": token},
                     {"$set": {"token": token, "name": category_name, "enabled": True,
