@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { CheckSquare, Download, Layers, Save, Square, Upload } from 'lucide-react';
+import { CheckSquare, Download, Layers, RefreshCw, Save, Square, Trash2, Upload } from 'lucide-react';
 import api from '../../lib/api';
 import { Button } from '../../components/ui/button';
 import { useToast } from '../../hooks/use-toast';
@@ -12,6 +12,8 @@ const AdminDmart = () => {
   const [saving, setSaving] = useState(false);
   const [importing, setImporting] = useState(false);
   const [merging, setMerging] = useState(false);
+  const [replacing, setReplacing] = useState(false);
+  const [job, setJob] = useState(null);
   const csvInputRef = useRef(null);
 
   const load = async () => {
@@ -24,6 +26,7 @@ const AdminDmart = () => {
   useEffect(() => { load().catch(() => {}); }, []);
 
   const activeCount = useMemo(() => categories.reduce((sum, item) => sum + (item.product_count || 0), 0), [categories]);
+  const busy = saving || importing || merging || replacing;
   const toggle = (token) => setSelected((current) => {
     const next = new Set(current);
     if (next.has(token)) next.delete(token); else next.add(token);
@@ -96,6 +99,42 @@ const AdminDmart = () => {
     } finally { setMerging(false); }
   };
 
+  const replaceCatalogue = async () => {
+    if (!selected.size) return toast({ title: 'Select at least one category to re-import', variant: 'destructive' });
+    if (!confirm('Permanently delete ALL existing DMart products and import a fresh catalogue? Seethammadhara / other products are not touched. This cannot be undone.')) return;
+    setReplacing(true);
+    setJob({ status: 'queued', category_done: 0, category_total: selected.size, added: 0, sku_count: 0, deleted: 0 });
+    try {
+      await api.put('/admin/dmart/categories', { tokens: [...selected] });
+      const { data } = await api.post('/admin/dmart/replace', { tokens: [...selected], confirm: true });
+      setJob((current) => ({ ...current, ...data }));
+      toast({ title: 'Fresh DMart import started', description: 'Old DMart products are being deleted, then a new catalogue will be imported. Keep this page open.' });
+      window.dispatchEvent(new Event('admin-notifications-updated'));
+      while (true) {
+        await new Promise((resolve) => setTimeout(resolve, 2500));
+        const status = await api.get(`/admin/dmart/sync/${data.job_id}`);
+        setJob(status.data);
+        if (['completed', 'completed_with_errors', 'failed'].includes(status.data.status)) {
+          await load();
+          window.dispatchEvent(new Event('admin-notifications-updated'));
+          if (status.data.status === 'failed') {
+            toast({ title: 'Fresh import failed', description: (status.data.errors || []).join(' ') || 'Try again', variant: 'destructive' });
+          } else {
+            toast({
+              title: status.data.status === 'completed_with_errors' ? 'Imported with some errors' : 'Fresh DMart catalogue imported',
+              description: `Added ${status.data.added || 0} products from ${status.data.sku_count || 0} pack sizes.`,
+              variant: status.data.status === 'completed_with_errors' ? 'destructive' : undefined,
+            });
+          }
+          break;
+        }
+      }
+    } catch (error) {
+      const detail = error.response?.data?.detail;
+      toast({ title: 'Replace failed', description: typeof detail === 'string' ? detail : error.message, variant: 'destructive' });
+    } finally { setReplacing(false); }
+  };
+
   const downloadCsv = async () => {
     try {
       const response = await api.get('/admin/dmart/export.csv', { responseType: 'blob' });
@@ -116,16 +155,36 @@ const AdminDmart = () => {
           <p className="text-sm text-gray-500 mt-1">Public DMart Ready MRP catalogue · requested area {pincode}. Sale prices are never imported.</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button variant="outline" onClick={mergeVariants} disabled={merging || importing}>
+          <Button variant="outline" onClick={mergeVariants} disabled={busy}>
             <Layers className="w-4 h-4 mr-2" />{merging ? 'Merging…' : 'Merge Pack Sizes'}
           </Button>
-          <Button variant="outline" onClick={downloadCsv}><Download className="w-4 h-4 mr-2" />Export Live CSV</Button>
-          <Button variant="outline" onClick={save} disabled={saving || importing}><Save className="w-4 h-4 mr-2" />Save Selection</Button>
-          <Button variant="outline" onClick={downloadBrowserScript}><Download className="w-4 h-4 mr-2" />Download Export Script</Button>
+          <Button variant="outline" onClick={downloadCsv} disabled={busy}><Download className="w-4 h-4 mr-2" />Export Live CSV</Button>
+          <Button variant="outline" onClick={save} disabled={busy}><Save className="w-4 h-4 mr-2" />Save Selection</Button>
+          <Button variant="outline" onClick={downloadBrowserScript} disabled={busy}><Download className="w-4 h-4 mr-2" />Download Export Script</Button>
           <input ref={csvInputRef} type="file" accept=".csv,text/csv" className="hidden" onChange={importCsv} />
-          <Button onClick={() => csvInputRef.current?.click()} disabled={importing} className="bg-[#6b3410] hover:bg-[#4d260b]"><Upload className="w-4 h-4 mr-2" />{importing ? 'Importing…' : 'Upload DMart CSV'}</Button>
+          <Button onClick={() => csvInputRef.current?.click()} disabled={busy} className="bg-[#6b3410] hover:bg-[#4d260b]"><Upload className="w-4 h-4 mr-2" />{importing ? 'Importing…' : 'Upload DMart CSV'}</Button>
+          <Button onClick={replaceCatalogue} disabled={busy} className="bg-red-700 hover:bg-red-800">
+            {replacing ? <RefreshCw className="w-4 h-4 mr-2 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />}
+            {replacing ? 'Replacing…' : 'Delete all & import fresh'}
+          </Button>
         </div>
       </div>
+
+      {job && (
+        <div className="bg-white border rounded-lg p-4 text-sm">
+          <div className="font-semibold text-slate-800">Fresh import: {job.status}</div>
+          <div className="text-slate-500 mt-1">
+            Categories {job.category_done || 0}/{job.category_total || 0}
+            {job.current_category ? ` · ${job.current_category}` : ''}
+            {' · '}Deleted {job.deleted || 0}
+            {' · '}Products {job.added || 0}
+            {' · '}Pack sizes {job.sku_count || 0}
+          </div>
+          {job.errors?.length > 0 && (
+            <div className="text-red-600 text-xs mt-2">{job.errors.slice(0, 5).join(' · ')}</div>
+          )}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div className="bg-white border rounded-lg p-4"><div className="text-xs text-gray-500">Selected categories</div><div className="text-2xl font-bold">{selected.size}</div></div>
@@ -134,7 +193,7 @@ const AdminDmart = () => {
       </div>
 
       <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-900">
-        Workflow: select categories and save → download the export script → open dmart.in with your delivery location selected → copy the complete script into the browser Console → upload the generated dmart-selected-products.csv here. Same DMart item in 500 g / 1 kg / 5 kg is stored as one product with quantity variants. If older imports still show each size separately, click Merge Pack Sizes. Unchecking a category hides products without deleting them. Only MRP is imported, and DMart-own-label names are excluded.
+        To wipe the old DMart listings and pull a clean catalogue: select the categories to keep, then click <strong>Delete all & import fresh</strong>. Pack sizes of the same item are stored as variants. Only DMart products are deleted; Seethammadhara products stay. CSV upload still works if you prefer the browser export.
       </div>
 
       <div className="bg-white border rounded-lg overflow-x-auto">

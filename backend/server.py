@@ -38,6 +38,7 @@ from dmart_sync import (
     DMART_CATEGORIES,
     DMART_PINCODE,
     collapse_existing_sku_products,
+    delete_all_dmart_products,
     group_csv_rows,
     hide_legacy_sku_products,
     rams_slug,
@@ -215,6 +216,10 @@ class DmartCategorySelectionIn(BaseModel):
 
 class DmartSyncIn(BaseModel):
     tokens: Optional[List[str]] = None
+
+class DmartReplaceIn(BaseModel):
+    tokens: Optional[List[str]] = None
+    confirm: bool = False
 
 class DmartCsvImportIn(BaseModel):
     csv_text: str = Field(min_length=1, max_length=25_000_000)
@@ -1842,6 +1847,30 @@ async def run_dmart_job(job_id, tokens):
         await create_admin_notification("DMart catalogue sync failed", message)
 
 
+async def run_dmart_replace_job(job_id, tokens):
+    try:
+        await db.dmart_sync_jobs.update_one(
+            {"id": job_id},
+            {"$set": {
+                "status": "running", "started_at": now_iso(),
+                "current_category": "Deleting old DMart products",
+            }},
+        )
+        deleted = await delete_all_dmart_products(db)
+        await db.dmart_sync_jobs.update_one({"id": job_id}, {"$set": {"deleted": deleted}})
+        await create_admin_notification(
+            "DMart catalogue reset",
+            f"Deleted {deleted} old DMart products. Fresh import started for {len(tokens)} categories.",
+        )
+        await sync_categories(db, tokens, job_id, create_admin_notification)
+    except Exception as exc:
+        message = str(exc)[:500]
+        await db.dmart_sync_jobs.update_one(
+            {"id": job_id}, {"$set": {"status": "failed", "finished_at": now_iso(), "errors": [message]}},
+        )
+        await create_admin_notification("DMart catalogue replace failed", message)
+
+
 @api.post("/admin/dmart/sync")
 async def admin_start_dmart_sync(payload: DmartSyncIn, _=Depends(get_current_admin)):
     if payload.tokens is None:
@@ -1874,6 +1903,35 @@ async def admin_dmart_sync_status(job_id: str, _=Depends(get_current_admin)):
     if not job:
         raise HTTPException(404, "DMart sync job not found")
     return clean(job)
+
+
+@api.post("/admin/dmart/replace")
+async def admin_replace_dmart_catalogue(payload: DmartReplaceIn, _=Depends(get_current_admin)):
+    if not payload.confirm:
+        raise HTTPException(400, "Confirmation required to delete DMart products")
+    running = await db.dmart_sync_jobs.find_one({"status": {"$in": ["queued", "running"]}})
+    if running:
+        raise HTTPException(409, "A DMart import is already running. Wait for it to finish.")
+    if payload.tokens is None:
+        configured = await db.dmart_categories.find({"enabled": True}).to_list(100)
+        tokens = [item["token"] for item in configured]
+    else:
+        tokens = list(dict.fromkeys(payload.tokens))
+    known = {token for token, _name in DMART_CATEGORIES}
+    if set(tokens) - known:
+        raise HTTPException(400, "One or more selected DMart categories are invalid")
+    if not tokens:
+        raise HTTPException(400, "Select and save at least one DMart category first")
+
+    job_id = str(uuid.uuid4())
+    await db.dmart_sync_jobs.insert_one({
+        "id": job_id, "status": "queued", "tokens": tokens, "category_done": 0,
+        "category_total": len(tokens), "added": 0, "updated": 0, "hidden": 0,
+        "sku_count": 0, "deleted": 0, "errors": [], "created_at": now_iso(),
+        "current_category": "Deleting old DMart products",
+    })
+    asyncio.create_task(run_dmart_replace_job(job_id, tokens))
+    return {"deleted": 0, "job_id": job_id, "status": "queued", "tokens": tokens}
 
 
 @api.post("/admin/dmart/merge-variants")

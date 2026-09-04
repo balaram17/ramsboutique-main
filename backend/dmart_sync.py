@@ -315,6 +315,24 @@ async def hide_legacy_sku_products(db, token=None):
     return result.modified_count
 
 
+async def delete_all_dmart_products(db):
+    """Permanently remove every DMart-sourced product. Other catalogues are left untouched."""
+    deleted = 0
+    while True:
+        docs = await db.products.find({"source_market": "dmart"}, {"id": 1}).to_list(500)
+        ids = [doc.get("id") for doc in docs if doc.get("id")]
+        if not ids:
+            leftover = await db.products.delete_many({"source_market": "dmart"})
+            deleted += leftover.deleted_count
+            break
+        result = await db.products.delete_many({"id": {"$in": ids}})
+        deleted += result.deleted_count
+        if result.deleted_count == 0:
+            break
+        await asyncio.sleep(0.05)
+    return deleted
+
+
 async def collapse_existing_sku_products(db):
     """Merge already-imported per-SKU DMart rows into parent products with variants."""
     legacy = await db.products.find({
