@@ -37,8 +37,10 @@ from catalog_sync import inspect_source, proposed_update
 from dmart_sync import (
     DMART_CATEGORIES,
     DMART_PINCODE,
+    SEETHAMMADHARA_REMOVED_MIGRATION,
     collapse_existing_sku_products,
     delete_all_dmart_products,
+    delete_seethammadhara_products,
     group_csv_rows,
     hide_legacy_sku_products,
     rams_slug,
@@ -549,7 +551,11 @@ async def seed_db():
     # The bundled CSV is only an initial bootstrap. Once a DRB catalogue exists,
     # Admin CSV Sync is authoritative; Azure restarts must not recreate rows
     # that an administrator has removed from a later CSV.
-    if market_csv.exists() and await db.products.count_documents({"source_market": "seethammadhara"}) == 0:
+    if (
+        market_csv.exists()
+        and await db.products.count_documents({"source_market": "seethammadhara"}) == 0
+        and not await db.app_migrations.find_one({"id": SEETHAMMADHARA_REMOVED_MIGRATION})
+    ):
         category_map = {
             "groceries": ("grocery", "Grocery & Staples", "wheat"),
             "fruits": ("fruits-vegetables", "Fruits & Vegetables", "apple"),
@@ -1853,14 +1859,15 @@ async def run_dmart_replace_job(job_id, tokens):
             {"id": job_id},
             {"$set": {
                 "status": "running", "started_at": now_iso(),
-                "current_category": "Deleting old DMart products",
+                "current_category": "Deleting old DMart and Seethammadhara products",
             }},
         )
         deleted = await delete_all_dmart_products(db)
+        deleted += await delete_seethammadhara_products(db)
         await db.dmart_sync_jobs.update_one({"id": job_id}, {"$set": {"deleted": deleted}})
         await create_admin_notification(
-            "DMart catalogue reset",
-            f"Deleted {deleted} old DMart products. Fresh import started for {len(tokens)} categories.",
+            "Catalogue reset",
+            f"Deleted {deleted} old DMart and Seethammadhara products. Fresh DMart import started for {len(tokens)} categories.",
         )
         await sync_categories(db, tokens, job_id, create_admin_notification)
     except Exception as exc:
@@ -1928,7 +1935,7 @@ async def admin_replace_dmart_catalogue(payload: DmartReplaceIn, _=Depends(get_c
         "id": job_id, "status": "queued", "tokens": tokens, "category_done": 0,
         "category_total": len(tokens), "added": 0, "updated": 0, "hidden": 0,
         "sku_count": 0, "deleted": 0, "errors": [], "created_at": now_iso(),
-        "current_category": "Deleting old DMart products",
+        "current_category": "Deleting old DMart and Seethammadhara products",
     })
     asyncio.create_task(run_dmart_replace_job(job_id, tokens))
     return {"deleted": 0, "job_id": job_id, "status": "queued", "tokens": tokens}
@@ -1943,6 +1950,16 @@ async def admin_merge_dmart_variants(_=Depends(get_current_admin)):
         f"Created {result['added']} products, updated {result['updated']}, hid {result['hidden']} old SKU listings.",
     )
     return result
+
+
+@api.post("/admin/catalog/delete-seethammadhara")
+async def admin_delete_seethammadhara(_=Depends(get_current_admin)):
+    deleted = await delete_seethammadhara_products(db)
+    await create_admin_notification(
+        "Seethammadhara products deleted",
+        f"Removed {deleted} Seethammadhara / Digi Rythu Bazaar products. They will not come back on Azure restart.",
+    )
+    return {"deleted": deleted}
 
 
 @api.get("/admin/dmart/export.csv")

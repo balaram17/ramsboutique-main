@@ -315,14 +315,17 @@ async def hide_legacy_sku_products(db, token=None):
     return result.modified_count
 
 
-async def delete_all_dmart_products(db):
-    """Permanently remove every DMart-sourced product. Other catalogues are left untouched."""
+SEETHAMMADHARA_REMOVED_MIGRATION = "seethammadhara_removed_by_admin_v1"
+SEETHAMMADHARA_BRANDS = ("DRB", "Digi Rythu Bazar", "Digi Rythu Bazaar")
+
+
+async def delete_products_matching(db, query):
     deleted = 0
     while True:
-        docs = await db.products.find({"source_market": "dmart"}, {"id": 1}).to_list(500)
+        docs = await db.products.find(query, {"id": 1}).to_list(500)
         ids = [doc.get("id") for doc in docs if doc.get("id")]
         if not ids:
-            leftover = await db.products.delete_many({"source_market": "dmart"})
+            leftover = await db.products.delete_many(query)
             deleted += leftover.deleted_count
             break
         result = await db.products.delete_many({"id": {"$in": ids}})
@@ -330,6 +333,26 @@ async def delete_all_dmart_products(db):
         if result.deleted_count == 0:
             break
         await asyncio.sleep(0.05)
+    return deleted
+
+
+async def delete_all_dmart_products(db):
+    """Permanently remove every DMart-sourced product."""
+    return await delete_products_matching(db, {"source_market": "dmart"})
+
+
+async def delete_seethammadhara_products(db):
+    """Permanently remove Seethammadhara / Digi Rythu Bazaar products and stop seed from restoring them."""
+    deleted = await delete_products_matching(db, {"source_market": "seethammadhara"})
+    deleted += await delete_products_matching(db, {
+        "source_market": {"$ne": "dmart"},
+        "brand": {"$in": list(SEETHAMMADHARA_BRANDS)},
+    })
+    await db.app_migrations.update_one(
+        {"id": SEETHAMMADHARA_REMOVED_MIGRATION},
+        {"$set": {"id": SEETHAMMADHARA_REMOVED_MIGRATION, "applied_at": now_iso()}},
+        upsert=True,
+    )
     return deleted
 
 
