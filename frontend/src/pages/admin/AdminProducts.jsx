@@ -39,6 +39,7 @@ const AdminProducts = () => {
   const [globalBusy, setGlobalBusy] = useState(false);
   const [syncBusy, setSyncBusy] = useState(false);
   const [csvBusy, setCsvBusy] = useState(false);
+  const [deletingMarket, setDeletingMarket] = useState(false);
   const [visibilityFilter, setVisibilityFilter] = useState('all');
   const csvInputRef = useRef(null);
 
@@ -88,6 +89,19 @@ const AdminProducts = () => {
       window.dispatchEvent(new Event('admin-notifications-updated'));
     }
     finally { setSyncBusy(false); }
+  };
+
+  const deleteSeethammadhara = async () => {
+    if (!confirm('Permanently delete ALL Seethammadhara / Digi Rythu Bazaar products? DMart products are kept. This cannot be undone, and Azure restarts will not restore them.')) return;
+    setDeletingMarket(true);
+    try {
+      const { data } = await api.post('/admin/catalog/delete-seethammadhara');
+      toast({ title: 'Seethammadhara products deleted', description: `Removed ${data.deleted} products.` });
+      window.dispatchEvent(new Event('admin-notifications-updated'));
+      load();
+    } catch (e) {
+      toast({ title: 'Delete failed', description: e.response?.data?.detail || e.message, variant: 'destructive' });
+    } finally { setDeletingMarket(false); }
   };
 
   const load = useCallback(() => api.get('/admin/products?limit=1000').then((r) => setList(r.data)), []);
@@ -258,7 +272,10 @@ const AdminProducts = () => {
           <Button variant="outline" onClick={exportMasterCsv} disabled={!list.length} className="gap-2">
             <Download className="h-4 w-4" /> Export Master CSV
           </Button>
-          <Button variant="outline" onClick={refreshReferences} disabled={syncBusy || csvBusy} className="gap-2"><RefreshCw className={`h-4 w-4 ${syncBusy?'animate-spin':''}`} /> Refresh Images & Vizag Prices</Button><Button onClick={openNew} className="gap-2 bg-emerald-600 hover:bg-emerald-700 text-white">
+          <Button variant="outline" onClick={deleteSeethammadhara} disabled={csvBusy || syncBusy || deletingMarket} className="gap-2 border-red-200 text-red-700 hover:bg-red-50">
+            <Trash2 className="h-4 w-4" /> {deletingMarket ? 'Deleting…' : 'Delete Seethammadhara products'}
+          </Button>
+          <Button variant="outline" onClick={refreshReferences} disabled={syncBusy || csvBusy || deletingMarket} className="gap-2"><RefreshCw className={`h-4 w-4 ${syncBusy?'animate-spin':''}`} /> Refresh Images & Vizag Prices</Button><Button onClick={openNew} className="gap-2 bg-emerald-600 hover:bg-emerald-700 text-white">
           <Plus className="h-4 w-4" /> Add Product
         </Button></div>
       </div>

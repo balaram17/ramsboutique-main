@@ -101,14 +101,14 @@ const AdminDmart = () => {
 
   const replaceCatalogue = async () => {
     if (!selected.size) return toast({ title: 'Select at least one category to re-import', variant: 'destructive' });
-    if (!confirm('Permanently delete ALL existing DMart products and import a fresh catalogue? Seethammadhara / other products are not touched. This cannot be undone.')) return;
+    if (!confirm('Permanently delete ALL existing DMart products AND all Seethammadhara / Digi Rythu Bazaar products, then import a fresh DMart catalogue? This cannot be undone.')) return;
     setReplacing(true);
     setJob({ status: 'queued', category_done: 0, category_total: selected.size, added: 0, sku_count: 0, deleted: 0 });
     try {
       await api.put('/admin/dmart/categories', { tokens: [...selected] });
       const { data } = await api.post('/admin/dmart/replace', { tokens: [...selected], confirm: true });
       setJob((current) => ({ ...current, ...data }));
-      toast({ title: 'Fresh DMart import started', description: 'Old DMart products are being deleted, then a new catalogue will be imported. Keep this page open.' });
+      toast({ title: 'Fresh DMart import started', description: 'Old DMart and Seethammadhara products are being deleted, then a new DMart catalogue will be imported. Keep this page open.' });
       window.dispatchEvent(new Event('admin-notifications-updated'));
       while (true) {
         await new Promise((resolve) => setTimeout(resolve, 2500));
@@ -193,7 +193,7 @@ const AdminDmart = () => {
       </div>
 
       <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-900">
-        To wipe the old DMart listings and pull a clean catalogue: select the categories to keep, then click <strong>Delete all & import fresh</strong>. Pack sizes of the same item are stored as variants. Only DMart products are deleted; Seethammadhara products stay. CSV upload still works if you prefer the browser export.
+        To wipe old listings and pull a clean DMart catalogue: select the categories to keep, then click <strong>Delete all & import fresh</strong>. That also deletes Seethammadhara / Digi Rythu Bazaar products. Pack sizes of the same DMart item are stored as variants.
       </div>
 
       <div className="bg-white border rounded-lg overflow-x-auto">
