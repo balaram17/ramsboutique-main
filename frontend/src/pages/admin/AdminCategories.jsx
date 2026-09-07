@@ -82,12 +82,12 @@ const AdminCategories = () => {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
         <div>
-          <h1 className="text-2xl font-bold">Categories</h1>
+          <h1 className="text-xl sm:text-2xl font-bold">Categories</h1>
           <p className="text-xs text-gray-500 mt-0.5">Manage the product categories shown across the store.</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="grid grid-cols-1 gap-2 min-[400px]:grid-cols-2 sm:flex sm:items-center">
           <select value={visibilityFilter} onChange={(event) => setVisibilityFilter(event.target.value)} className="h-10 px-3 border rounded-md bg-white text-sm">
             <option value="all">All ({list.length})</option>
             <option value="active">Active ({list.filter(category => category.active !== false).length})</option>
@@ -98,7 +98,7 @@ const AdminCategories = () => {
       </div>
 
       <div className="bg-white border rounded-lg overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full min-w-[680px] text-sm">
           <thead className="bg-gray-50 text-left">
             <tr><th className="px-4 py-2 w-24">Order</th><th className="px-4 py-2">Slug</th><th className="px-4 py-2">Display name</th><th className="px-4 py-2">Icon</th><th className="px-4 py-2">Status</th><th></th></tr>
           </thead>

@@ -151,10 +151,10 @@ const AdminDmart = () => {
     <div className="space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold">DMart Catalogue</h1>
+          <h1 className="text-xl sm:text-2xl font-bold">DMart Catalogue</h1>
           <p className="text-sm text-gray-500 mt-1">Public DMart Ready MRP catalogue · requested area {pincode}. Sale prices are never imported.</p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="grid w-full grid-cols-1 gap-2 min-[430px]:grid-cols-2 sm:flex sm:w-auto sm:flex-wrap">
           <Button variant="outline" onClick={mergeVariants} disabled={busy}>
             <Layers className="w-4 h-4 mr-2" />{merging ? 'Merging…' : 'Merge Pack Sizes'}
           </Button>
@@ -201,7 +201,7 @@ const AdminDmart = () => {
           <Button size="sm" variant="outline" onClick={() => setSelected(new Set(categories.map((item) => item.token)))}><CheckSquare className="w-4 h-4 mr-1" />Select all</Button>
           <Button size="sm" variant="outline" onClick={() => setSelected(new Set())}><Square className="w-4 h-4 mr-1" />Clear</Button>
         </div>
-        <table className="w-full text-sm">
+        <table className="w-full min-w-[680px] text-sm">
           <thead className="bg-gray-50 text-left"><tr><th className="px-4 py-3">Keep</th><th className="px-4 py-3">DMart category</th><th className="px-4 py-3">Imported</th><th className="px-4 py-3">Last sync</th><th className="px-4 py-3">Status</th></tr></thead>
           <tbody>{categories.map((item) => (
             <tr key={item.token} className="border-t hover:bg-gray-50">

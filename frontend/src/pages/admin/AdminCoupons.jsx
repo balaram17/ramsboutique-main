@@ -67,16 +67,16 @@ const AdminCoupons = () => {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
         <div>
-          <h1 className="text-2xl font-bold">Coupons</h1>
+          <h1 className="text-xl sm:text-2xl font-bold">Coupons</h1>
           <p className="text-xs text-gray-500 mt-0.5">Create discount codes shoppers can apply at checkout.</p>
         </div>
-        <Button onClick={openNew} className="bg-[#6b3410] hover:bg-[#4d260b] gap-2"><Plus className="w-4 h-4" /> New Coupon</Button>
+        <Button onClick={openNew} className="w-full sm:w-auto bg-[#6b3410] hover:bg-[#4d260b] gap-2"><Plus className="w-4 h-4" /> New Coupon</Button>
       </div>
 
       <div className="bg-white border rounded-lg overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full min-w-[680px] text-sm">
           <thead className="bg-gray-50 text-left">
             <tr>
               <th className="px-4 py-2">Code</th>
@@ -127,7 +127,7 @@ const AdminCoupons = () => {
               <Input value={f.code} onChange={(e) => setF({ ...f, code: e.target.value.toUpperCase().replace(/\s+/g, '') })}
                 placeholder="WELCOME50" disabled={!!editing} />
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <Label>Discount type</Label>
                 <select className="w-full h-10 border rounded-md px-3 text-sm" value={f.discount_type}
@@ -141,7 +141,7 @@ const AdminCoupons = () => {
                 <Input type="number" value={f.value} onChange={(e) => setF({ ...f, value: e.target.value })} />
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <Label>Minimum order (₹)</Label>
                 <Input type="number" value={f.min_order} onChange={(e) => setF({ ...f, min_order: e.target.value })} />

@@ -4,7 +4,7 @@ import { ShoppingBag, Package, Users, IndianRupee, Truck, Clock, CheckCircle2 } 
 import { inr } from '../../lib/utils';
 
 const Card = ({ icon: Icon, label, value, color }) => (
-  <div className="bg-white rounded-lg p-5 border">
+  <div className="bg-white rounded-lg p-4 sm:p-5 border min-w-0">
     <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${color}`}><Icon className="w-5 h-5 text-white" /></div>
     <div className="text-2xl font-bold mt-3">{value}</div>
     <div className="text-xs text-gray-500 mt-1">{label}</div>
@@ -21,9 +21,9 @@ const AdminDashboard = () => {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-6">Dashboard</h1>
+      <h1 className="text-xl sm:text-2xl font-bold mb-4 sm:mb-6">Dashboard</h1>
       {!s ? <div>Loading...</div> : (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 min-[380px]:grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4">
           <Card icon={IndianRupee} label="Total Revenue" value={inr(s.revenue)} color="bg-[#6b3410]" />
           <Card icon={ShoppingBag} label="Total Orders" value={s.total_orders} color="bg-[#f7941d]" />
           <Card icon={Clock} label="Pending Orders" value={s.pending_orders} color="bg-blue-500" />
@@ -34,9 +34,10 @@ const AdminDashboard = () => {
         </div>
       )}
 
-      <div className="mt-8 bg-white rounded-lg border">
-        <div className="px-5 py-3 border-b font-semibold">Recent Orders</div>
-        <table className="w-full text-sm">
+      <div className="mt-6 sm:mt-8 bg-white rounded-lg border overflow-hidden">
+        <div className="px-4 sm:px-5 py-3 border-b font-semibold">Recent Orders</div>
+        <div className="overflow-x-auto overscroll-x-contain">
+        <table className="w-full min-w-[640px] text-sm">
           <thead className="bg-gray-50 text-gray-600 text-left">
             <tr><th className="px-5 py-2">Order</th><th className="px-5 py-2">Items</th><th className="px-5 py-2">Total</th><th className="px-5 py-2">Payment</th><th className="px-5 py-2">Status</th></tr>
           </thead>
@@ -52,6 +53,7 @@ const AdminDashboard = () => {
             ))}
           </tbody>
         </table>
+        </div>
       </div>
     </div>
   );

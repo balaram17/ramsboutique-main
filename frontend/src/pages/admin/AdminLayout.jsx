@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { NavLink, Outlet, Navigate, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { LayoutDashboard, Package, ShoppingBag, Users, Truck, LogOut, FileText, Tag, Ticket, PiggyBank, Bell, X, Store } from 'lucide-react';
+import { LayoutDashboard, Package, ShoppingBag, Users, Truck, LogOut, FileText, Tag, Ticket, PiggyBank, Bell, X, Store, Menu } from 'lucide-react';
 import api from '../../lib/api';
 import { signOutStaffWithMicrosoft } from '../../lib/entraAuth';
 
@@ -10,6 +10,7 @@ const AdminLayout = () => {
   const nav = useNavigate();
   const [notifications, setNotifications] = useState([]);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [showMenu, setShowMenu] = useState(false);
   const loadNotifications = useCallback(() => {
     api.get('/admin/notifications').then(({ data }) => setNotifications(data)).catch(() => {});
   }, []);
@@ -22,6 +23,17 @@ const AdminLayout = () => {
       window.removeEventListener('admin-notifications-updated', loadNotifications);
     };
   }, [loadNotifications]);
+  useEffect(() => {
+    if (!showMenu) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const closeOnEscape = (event) => event.key === 'Escape' && setShowMenu(false);
+    window.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [showMenu]);
   const openNotifications = async () => {
     setShowNotifications((value) => !value);
     if (notifications.some((item) => !item.read)) {
@@ -51,17 +63,21 @@ const AdminLayout = () => {
   ];
 
   return (
-    <div className="min-h-screen flex bg-gray-100">
-      <aside className="w-60 bg-[#2b1608] text-white flex flex-col">
+    <div className="admin-shell min-h-screen flex bg-gray-100">
+      {showMenu && <button aria-label="Close navigation" className="fixed inset-0 z-40 bg-black/50 lg:hidden" onClick={() => setShowMenu(false)} />}
+      <aside className={`fixed inset-y-0 left-0 z-50 w-72 max-w-[85vw] bg-[#2b1608] text-white flex flex-col transition-transform duration-200 lg:static lg:z-auto lg:w-60 lg:max-w-none lg:translate-x-0 ${showMenu ? 'translate-x-0' : '-translate-x-full'}`}>
         <div className="p-5 border-b border-white/10">
-          <div>
+          <div className="flex items-start justify-between gap-3">
+            <div>
             <img src="/rb-logo.png" alt="BTA FreshMart" className="h-16 w-auto max-w-full object-contain object-left" />
             <div className="mt-1 text-[10px] text-gray-400">Vizag Admin</div>
+            </div>
+            <button className="rounded-lg p-2 hover:bg-white/10 lg:hidden" aria-label="Close menu" onClick={() => setShowMenu(false)}><X className="h-5 w-5" /></button>
           </div>
         </div>
-        <nav className="flex-1 py-3">
+        <nav className="flex-1 overflow-y-auto py-3">
           {items.map((it) => (
-            <NavLink key={it.to} to={it.to} end={it.end} className={({ isActive }) => `flex items-center gap-3 px-5 py-2.5 text-sm hover:bg-white/5 transition ${isActive ? 'bg-white/10 border-l-4 border-[#f7941d] font-semibold' : 'border-l-4 border-transparent'}`}>
+            <NavLink onClick={() => setShowMenu(false)} key={it.to} to={it.to} end={it.end} className={({ isActive }) => `flex min-h-11 items-center gap-3 px-5 py-2.5 text-sm hover:bg-white/5 transition ${isActive ? 'bg-white/10 border-l-4 border-[#f7941d] font-semibold' : 'border-l-4 border-transparent'}`}>
               <it.icon className="w-4 h-4" />{it.label}
             </NavLink>
           ))}
@@ -70,15 +86,20 @@ const AdminLayout = () => {
           <LogOut className="w-4 h-4" /> Logout
         </button>
       </aside>
-      <main className="flex-1 overflow-x-hidden relative">
-        <div className="h-14 bg-white border-b flex items-center justify-end px-6 sticky top-0 z-30">
-          <button onClick={openNotifications} className="relative p-2 rounded-full hover:bg-gray-100" title="Admin notifications">
+      <main className="min-w-0 flex-1 overflow-x-hidden relative">
+        <div className="h-14 bg-white border-b flex items-center justify-between px-3 sm:px-6 sticky top-0 z-30">
+          <div className="flex items-center gap-2 lg:hidden">
+            <button className="rounded-lg p-2 hover:bg-gray-100" aria-label="Open admin menu" onClick={() => { setShowNotifications(false); setShowMenu(true); }}><Menu className="h-5 w-5" /></button>
+            <span className="text-sm font-semibold text-[#2b1608]">BTA FreshMart Admin</span>
+          </div>
+          <div className="hidden lg:block" />
+          <button onClick={openNotifications} className="relative min-h-11 min-w-11 p-2 rounded-full hover:bg-gray-100" title="Admin notifications">
             <Bell className="w-5 h-5 text-gray-700" />
             {notifications.some((item) => !item.read) && <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 border-2 border-white rounded-full" />}
           </button>
         </div>
         {showNotifications && (
-          <div className="fixed right-6 top-16 z-50 w-[min(420px,calc(100vw-3rem))] max-h-[70vh] overflow-y-auto bg-white border rounded-xl shadow-2xl">
+          <div className="fixed left-3 right-3 top-16 z-50 max-h-[75vh] overflow-y-auto bg-white border rounded-xl shadow-2xl sm:left-auto sm:right-6 sm:w-[420px]">
             <div className="p-4 border-b flex justify-between items-center sticky top-0 bg-white">
               <div className="font-bold">Admin Notifications</div>
               <button onClick={() => setShowNotifications(false)}><X className="w-4 h-4" /></button>
@@ -99,7 +120,7 @@ const AdminLayout = () => {
             ))}
           </div>
         )}
-        <div className="px-6 py-6"><Outlet /></div>
+        <div className="admin-content px-3 py-4 sm:px-6 sm:py-6"><Outlet /></div>
       </main>
     </div>
   );

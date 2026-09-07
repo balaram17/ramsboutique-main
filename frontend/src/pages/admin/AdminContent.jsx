@@ -61,12 +61,12 @@ const AdminContent = () => {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
         <div>
-          <h1 className="text-2xl font-bold">Site Content</h1>
+          <h1 className="text-xl sm:text-2xl font-bold">Site Content</h1>
           <p className="text-xs text-gray-500 mt-0.5">Edit the top strip, homepage hero, login page and footer. Changes appear immediately.</p>
         </div>
-        <div className="flex gap-2">
+        <div className="grid grid-cols-2 gap-2 sm:flex">
           <Button variant="outline" onClick={refresh} className="gap-2"><RefreshCw className="w-4 h-4" /> Reload</Button>
           <Button onClick={save} disabled={saving} className="bg-[#6b3410] hover:bg-[#4d260b] gap-2">
             {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
@@ -83,7 +83,7 @@ const AdminContent = () => {
       </div>
 
       <Tabs defaultValue="hero">
-        <TabsList className="grid grid-cols-4 max-w-2xl">
+        <TabsList className="grid h-auto grid-cols-2 sm:grid-cols-4 max-w-2xl">
           <TabsTrigger value="hero">Homepage Hero</TabsTrigger>
           <TabsTrigger value="login">Login Page</TabsTrigger>
           <TabsTrigger value="footer">Footer</TabsTrigger>

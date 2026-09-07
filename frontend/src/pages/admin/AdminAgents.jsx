@@ -43,9 +43,9 @@ const AdminAgents = () => {
   const copy = async (value) => { await navigator.clipboard.writeText(value || ''); toast({ title: 'Copied' }); };
 
   return <div>
-    <div className="flex items-center justify-between mb-4">
-      <h1 className="text-2xl font-bold">Delivery Agents</h1>
-      <Button onClick={openNew} className="bg-[#6b3410] hover:bg-[#4d260b] gap-2"><Plus className="w-4 h-4" /> Add Agent</Button>
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
+      <h1 className="text-xl sm:text-2xl font-bold">Delivery Agents</h1>
+      <Button onClick={openNew} className="w-full sm:w-auto bg-[#6b3410] hover:bg-[#4d260b] gap-2"><Plus className="w-4 h-4" /> Add Agent</Button>
     </div>
     <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-3">{list.map((a) => <div key={a.id} className="bg-white border rounded-lg p-4 flex items-center gap-3">
       <div className="w-10 h-10 rounded-full bg-[#6b3410] text-white flex items-center justify-center"><Truck className="w-5 h-5" /></div>
@@ -61,15 +61,15 @@ const AdminAgents = () => {
       <div className="space-y-3"><div><Label>Name</Label><Input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></div>
         <div><Label>Phone</Label><Input maxLength={10} inputMode="numeric" value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value.replace(/\D/g, '').slice(0, 10) })} /></div>
         <div className="flex items-center justify-between"><Label>Active</Label><Switch checked={f.active} onCheckedChange={(v) => setF({ ...f, active: v })} /></div>
-      </div><div className="flex justify-end gap-2 mt-4"><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
+      </div><div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 mt-4"><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
         <Button disabled={saving} onClick={save} className="bg-[#6b3410] hover:bg-[#4d260b]">{saving ? 'Creating in Microsoft…' : 'Save'}</Button></div>
     </DialogContent></Dialog>
 
     <Dialog open={Boolean(onboarding)} onOpenChange={(value) => { if (!value) setOnboarding(null); }}><DialogContent>
       <DialogHeader><DialogTitle className="flex items-center gap-2"><ShieldCheck className="w-5 h-5" /> Agent onboarding details</DialogTitle></DialogHeader>
       <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">Copy these details now. The temporary password is shown only once and must be changed during first sign-in.</div>
-      <div className="space-y-3"><div><Label>Microsoft username</Label><div className="flex gap-2"><Input readOnly value={onboarding?.username || ''} /><Button variant="outline" onClick={() => copy(onboarding?.username)}><Copy className="w-4 h-4" /></Button></div></div>
-        <div><Label>Temporary password</Label><div className="flex gap-2"><Input readOnly value={onboarding?.temporary_password || ''} /><Button variant="outline" onClick={() => copy(onboarding?.temporary_password)}><Copy className="w-4 h-4" /></Button></div></div></div>
+      <div className="space-y-3"><div><Label>Microsoft username</Label><div className="flex gap-2 min-w-0"><Input className="min-w-0" readOnly value={onboarding?.username || ''} /><Button size="icon" variant="outline" onClick={() => copy(onboarding?.username)}><Copy className="w-4 h-4" /></Button></div></div>
+        <div><Label>Temporary password</Label><div className="flex gap-2 min-w-0"><Input className="min-w-0" readOnly value={onboarding?.temporary_password || ''} /><Button size="icon" variant="outline" onClick={() => copy(onboarding?.temporary_password)}><Copy className="w-4 h-4" /></Button></div></div></div>
       <ol className="list-decimal pl-5 text-sm text-gray-600 space-y-1"><li>Open Agent Login and choose Staff Login with Microsoft.</li><li>Enter the username and temporary password above.</li><li>Create a new private password when Microsoft asks.</li><li>Install and register Microsoft Authenticator when prompted.</li></ol>
       <div className="flex justify-end"><Button onClick={() => setOnboarding(null)}>I have saved these details</Button></div>
     </DialogContent></Dialog>

@@ -261,10 +261,10 @@ const AdminProducts = () => {
   }, [list, q, visibilityFilter]);
 
   return (
-    <div className="p-6 max-w-6xl mx-auto space-y-6">
-      <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-bold tracking-tight">Manage Products</h1>
-        <div className="flex gap-2 flex-wrap justify-end">
+    <div className="max-w-6xl mx-auto space-y-4 sm:space-y-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:justify-between sm:items-start">
+        <h1 className="text-xl sm:text-2xl font-bold tracking-tight">Manage Products</h1>
+        <div className="grid grid-cols-1 gap-2 min-[430px]:grid-cols-2 sm:flex sm:flex-wrap sm:justify-end">
           <input ref={csvInputRef} type="file" accept=".csv,text/csv" onChange={syncCsv} className="hidden" />
           <Button variant="outline" onClick={() => csvInputRef.current?.click()} disabled={csvBusy || syncBusy} className="gap-2">
             <Upload className={`h-4 w-4 ${csvBusy?'animate-pulse':''}`} /> {csvBusy ? 'Synchronizing…' : 'Sync Products from CSV'}
@@ -287,7 +287,7 @@ const AdminProducts = () => {
           </div>
           <p className="text-xs text-slate-500">Increase or decrease every product base price and sub-variant globally by a set percentage matrix.</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Input 
             type="number" 
             placeholder="e.g. 5" 
@@ -332,8 +332,8 @@ const AdminProducts = () => {
         </select>
       </div>
 
-      <div className="border rounded-lg overflow-hidden bg-white shadow-sm">
-        <table className="w-full text-left border-collapse">
+      <div className="border rounded-lg overflow-x-auto bg-white shadow-sm">
+        <table className="w-full min-w-[820px] text-left border-collapse">
           <thead>
             <tr className="bg-slate-50 border-b text-slate-600 font-medium text-sm">
               <th className="p-4">Product Info</th>
@@ -400,7 +400,7 @@ const AdminProducts = () => {
             <DialogTitle>{editing ? 'Edit Product' : 'Add New Product'}</DialogTitle>
           </DialogHeader>
           
-          <div className="grid grid-cols-2 gap-4 py-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 py-4">
             <div className="space-y-2">
               <Label>Product Name</Label>
               <Input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
@@ -520,7 +520,7 @@ const AdminProducts = () => {
                 </div>
               )}
 
-              <div className="grid grid-cols-4 gap-2 items-end bg-slate-50 p-3 border border-dashed rounded-md">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 items-end bg-slate-50 p-3 border border-dashed rounded-md">
                 <div className="space-y-1">
                   <Label className="text-xs text-slate-600">Unit (e.g. 500g)</Label>
                   <Input className="h-8 text-xs bg-white" value={newVar.unit} onChange={(e) => setNewVar({ ...newVar, unit: e.target.value })} />

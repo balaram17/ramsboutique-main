@@ -46,10 +46,10 @@ const AdminOrders = () => {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-bold">Orders</h1>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
+        <h1 className="text-xl sm:text-2xl font-bold">Orders</h1>
         <Select value={filter} onValueChange={setFilter}>
-          <SelectTrigger className="w-48 bg-white"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="w-full sm:w-48 bg-white"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Orders</SelectItem>
             {STATUSES.map((s) => <SelectItem key={s} value={s} className="capitalize">{s.replace('_', ' ')}</SelectItem>)}
@@ -58,7 +58,7 @@ const AdminOrders = () => {
       </div>
 
       <div className="bg-white border rounded-lg overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full min-w-[860px] text-sm">
           <thead className="bg-gray-50 text-left">
             <tr>
               <th className="px-4 py-2">Order</th><th className="px-4 py-2">Customer</th>

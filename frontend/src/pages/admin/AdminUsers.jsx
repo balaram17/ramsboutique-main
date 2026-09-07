@@ -7,9 +7,9 @@ const AdminUsers = () => {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-4">Users</h1>
+      <h1 className="text-xl sm:text-2xl font-bold mb-4">Users</h1>
       <div className="bg-white border rounded-lg overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full min-w-[620px] text-sm">
           <thead className="bg-gray-50 text-left">
             <tr><th className="px-4 py-2">Name</th><th className="px-4 py-2">Email</th><th className="px-4 py-2">Phone</th><th className="px-4 py-2">Joined</th></tr>
           </thead>
