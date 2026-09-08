@@ -17,6 +17,7 @@ import logging
 import math
 import re
 import uuid
+import base64
 import httpx
 from pathlib import Path
 from pydantic import BaseModel, Field, EmailStr
@@ -29,6 +30,20 @@ from auth_utils import (
 )
 from seed_data import CATEGORIES, PRODUCTS, BANNERS
 import razorpay
+from webauthn import (
+    generate_authentication_options,
+    generate_registration_options,
+    verify_authentication_response,
+    verify_registration_response,
+)
+from webauthn.helpers import options_to_json
+from webauthn.helpers.structs import (
+    AuthenticatorAttachment,
+    AuthenticatorSelectionCriteria,
+    PublicKeyCredentialDescriptor,
+    ResidentKeyRequirement,
+    UserVerificationRequirement,
+)
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -86,6 +101,11 @@ ENTRA_WORKFORCE_SERVICE_PRINCIPAL_ID = os.environ.get("ENTRA_WORKFORCE_SERVICE_P
 ENTRA_AGENT_APP_ROLE_ID = os.environ.get("ENTRA_AGENT_APP_ROLE_ID", "").strip()
 ENTRA_EXTERNAL_TENANT_ID = os.environ.get("ENTRA_EXTERNAL_TENANT_ID", "").strip()
 ENTRA_EXTERNAL_CLIENT_ID = os.environ.get("ENTRA_EXTERNAL_CLIENT_ID", "").strip()
+WEBAUTHN_RP_ID = os.environ.get("WEBAUTHN_RP_ID", "ramsboutique.com").strip()
+WEBAUTHN_RP_NAME = os.environ.get("WEBAUTHN_RP_NAME", "BTA FreshMart Admin").strip()
+WEBAUTHN_ORIGINS = [value.strip() for value in os.environ.get(
+    "WEBAUTHN_ORIGINS", "https://ramsboutique.com,https://www.ramsboutique.com"
+).split(",") if value.strip()]
 
 entra_agent_provisioner = EntraAgentProvisioner(
     ENTRA_WORKFORCE_TENANT_ID,
@@ -135,6 +155,10 @@ class OtpCodeVerifyIn(BaseModel):
 
 class EntraTokenIn(BaseModel):
     token: str = Field(..., min_length=100)
+
+class WebAuthnVerifyIn(BaseModel):
+    challenge_id: str = Field(..., min_length=20, max_length=100)
+    credential: dict[str, Any]
 
 class LocationCheckIn(BaseModel):
     lat: float
@@ -839,6 +863,152 @@ async def agent(data: LoginAgentIn):
 async def debug_agents():
     docs = await db.agents.find().to_list(100)
     return [clean(d) for d in docs]
+
+
+def _b64url_encode(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+
+
+def _b64url_decode(value: str) -> bytes:
+    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+
+async def _new_webauthn_challenge(purpose: str, admin_id: str | None = None):
+    challenge_id = str(uuid.uuid4())
+    challenge = os.urandom(32)
+    await db.webauthn_challenges.insert_one({
+        "id": challenge_id,
+        "challenge": _b64url_encode(challenge),
+        "purpose": purpose,
+        "admin_id": admin_id,
+        "expires_at": datetime.now(timezone.utc) + timedelta(minutes=5),
+    })
+    return challenge_id, challenge
+
+
+async def _consume_webauthn_challenge(challenge_id: str, purpose: str, admin_id: str | None = None):
+    query = {
+        "id": challenge_id,
+        "purpose": purpose,
+        "expires_at": {"$gt": datetime.now(timezone.utc)},
+    }
+    if admin_id is not None:
+        query["admin_id"] = admin_id
+    record = await db.webauthn_challenges.find_one_and_delete(query)
+    if not record:
+        raise HTTPException(400, "Fingerprint request expired. Please try again.")
+    return _b64url_decode(record["challenge"])
+
+
+@api.get("/auth/webauthn/admin/status")
+async def admin_webauthn_status(current=Depends(get_current_admin)):
+    count = await db.admin_webauthn_credentials.count_documents({"admin_id": current["user_id"]})
+    return {"enrolled": count > 0, "credential_count": count}
+
+
+@api.post("/auth/webauthn/admin/register/options")
+async def admin_webauthn_register_options(current=Depends(get_current_admin)):
+    admin = await db.users.find_one({"id": current["user_id"], "role": "admin"})
+    if not admin:
+        raise HTTPException(404, "Admin not found")
+    existing = await db.admin_webauthn_credentials.find({"admin_id": admin["id"]}).to_list(20)
+    challenge_id, challenge = await _new_webauthn_challenge("register", admin["id"])
+    options = generate_registration_options(
+        rp_id=WEBAUTHN_RP_ID,
+        rp_name=WEBAUTHN_RP_NAME,
+        user_id=admin["id"].encode("utf-8"),
+        user_name=admin.get("email") or admin["id"],
+        user_display_name=admin.get("name") or "Administrator",
+        challenge=challenge,
+        authenticator_selection=AuthenticatorSelectionCriteria(
+            authenticator_attachment=AuthenticatorAttachment.PLATFORM,
+            resident_key=ResidentKeyRequirement.PREFERRED,
+            user_verification=UserVerificationRequirement.REQUIRED,
+        ),
+        exclude_credentials=[
+            PublicKeyCredentialDescriptor(id=_b64url_decode(item["credential_id"]))
+            for item in existing
+        ],
+    )
+    return {"challenge_id": challenge_id, "publicKey": json.loads(options_to_json(options))}
+
+
+@api.post("/auth/webauthn/admin/register/verify")
+async def admin_webauthn_register_verify(data: WebAuthnVerifyIn, current=Depends(get_current_admin)):
+    challenge = await _consume_webauthn_challenge(data.challenge_id, "register", current["user_id"])
+    try:
+        verified = verify_registration_response(
+            credential=data.credential,
+            expected_challenge=challenge,
+            expected_rp_id=WEBAUTHN_RP_ID,
+            expected_origin=WEBAUTHN_ORIGINS,
+            require_user_verification=True,
+        )
+    except Exception as exc:
+        logging.warning("Admin passkey registration failed: %s", exc)
+        raise HTTPException(400, "Fingerprint registration could not be verified") from exc
+    credential_id = _b64url_encode(verified.credential_id)
+    await db.admin_webauthn_credentials.update_one(
+        {"credential_id": credential_id},
+        {"$set": {
+            "credential_id": credential_id,
+            "public_key": _b64url_encode(verified.credential_public_key),
+            "sign_count": verified.sign_count,
+            "admin_id": current["user_id"],
+            "created_at": datetime.now(timezone.utc),
+        }},
+        upsert=True,
+    )
+    return {"status": "registered"}
+
+
+@api.post("/auth/webauthn/admin/login/options")
+async def admin_webauthn_login_options():
+    credentials = await db.admin_webauthn_credentials.find().to_list(100)
+    if not credentials:
+        raise HTTPException(404, "Fingerprint login has not been enrolled")
+    challenge_id, challenge = await _new_webauthn_challenge("authenticate")
+    options = generate_authentication_options(
+        rp_id=WEBAUTHN_RP_ID,
+        challenge=challenge,
+        allow_credentials=[
+            PublicKeyCredentialDescriptor(id=_b64url_decode(item["credential_id"]))
+            for item in credentials
+        ],
+        user_verification=UserVerificationRequirement.REQUIRED,
+    )
+    return {"challenge_id": challenge_id, "publicKey": json.loads(options_to_json(options))}
+
+
+@api.post("/auth/webauthn/admin/login/verify")
+async def admin_webauthn_login_verify(data: WebAuthnVerifyIn):
+    challenge = await _consume_webauthn_challenge(data.challenge_id, "authenticate")
+    credential_id = data.credential.get("id") or data.credential.get("rawId")
+    stored = await db.admin_webauthn_credentials.find_one({"credential_id": credential_id})
+    if not stored:
+        raise HTTPException(401, "Fingerprint credential is not registered")
+    admin = await db.users.find_one({"id": stored["admin_id"], "role": "admin"})
+    if not admin:
+        raise HTTPException(403, "Admin account is unavailable")
+    try:
+        verified = verify_authentication_response(
+            credential=data.credential,
+            expected_challenge=challenge,
+            expected_rp_id=WEBAUTHN_RP_ID,
+            expected_origin=WEBAUTHN_ORIGINS,
+            credential_public_key=_b64url_decode(stored["public_key"]),
+            credential_current_sign_count=stored.get("sign_count", 0),
+            require_user_verification=True,
+        )
+    except Exception as exc:
+        logging.warning("Admin passkey authentication failed: %s", exc)
+        raise HTTPException(401, "Fingerprint verification failed") from exc
+    await db.admin_webauthn_credentials.update_one(
+        {"credential_id": credential_id},
+        {"$set": {"sign_count": verified.new_sign_count, "last_used_at": datetime.now(timezone.utc)}},
+    )
+    token = create_token(admin["id"], "admin")
+    return {"token": token, "user": _public_user(admin)}
 
 @api.post("/auth/admin-login")
 async def admin_login(data: LoginIn):
@@ -2456,6 +2626,10 @@ logger = logging.getLogger(__name__)
 async def startup():
     await seed_db()
     await seed_chit_data()
+    await db.admin_webauthn_credentials.create_index("credential_id", unique=True)
+    await db.admin_webauthn_credentials.create_index("admin_id")
+    await db.webauthn_challenges.create_index("id", unique=True)
+    await db.webauthn_challenges.create_index("expires_at", expireAfterSeconds=0)
     start_chit_scheduler()
 
 
