@@ -1,16 +1,22 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { NavLink, Outlet, Navigate, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { LayoutDashboard, Package, ShoppingBag, Users, Truck, LogOut, FileText, Tag, Ticket, PiggyBank, Bell, X, Store, Menu } from 'lucide-react';
+import { LayoutDashboard, Package, ShoppingBag, Users, Truck, LogOut, FileText, Tag, Ticket, PiggyBank, Bell, X, Store, Menu, Fingerprint } from 'lucide-react';
 import api from '../../lib/api';
 import { signOutStaffWithMicrosoft } from '../../lib/entraAuth';
+import { enrollAdminPasskey, hasPlatformAuthenticator, isMobileDevice } from '../../lib/adminPasskey';
+import { useToast } from '../../hooks/use-toast';
 
 const AdminLayout = () => {
   const { user, loading, logout } = useAuth();
   const nav = useNavigate();
+  const { toast } = useToast();
   const [notifications, setNotifications] = useState([]);
   const [showNotifications, setShowNotifications] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
+  const [fingerprintAvailable, setFingerprintAvailable] = useState(false);
+  const [fingerprintEnrolled, setFingerprintEnrolled] = useState(false);
+  const [fingerprintBusy, setFingerprintBusy] = useState(false);
   const loadNotifications = useCallback(() => {
     api.get('/admin/notifications').then(({ data }) => setNotifications(data)).catch(() => {});
   }, []);
@@ -34,6 +40,13 @@ const AdminLayout = () => {
       window.removeEventListener('keydown', closeOnEscape);
     };
   }, [showMenu]);
+  useEffect(() => {
+    if (!user || user.role !== 'admin' || !isMobileDevice()) return;
+    hasPlatformAuthenticator().then((available) => {
+      setFingerprintAvailable(available);
+      if (available) api.get('/auth/webauthn/admin/status').then(({ data }) => setFingerprintEnrolled(data.enrolled)).catch(() => {});
+    });
+  }, [user]);
   const openNotifications = async () => {
     setShowNotifications((value) => !value);
     if (notifications.some((item) => !item.read)) {
@@ -45,6 +58,16 @@ const AdminLayout = () => {
     logout();
     const redirected = await signOutStaffWithMicrosoft().catch(() => false);
     if (!redirected) nav('/admin/login', { replace: true });
+  };
+  const setupFingerprint = async () => {
+    setFingerprintBusy(true);
+    try {
+      await enrollAdminPasskey();
+      setFingerprintEnrolled(true);
+      toast({ title: 'Fingerprint login enabled', description: 'You can now use this phone to sign in as Admin.' });
+    } catch (e) {
+      if (e?.name !== 'NotAllowedError') toast({ title: 'Fingerprint setup failed', description: e.response?.data?.detail || e.message, variant: 'destructive' });
+    } finally { setFingerprintBusy(false); }
   };
   if (loading) return <div className="p-10 text-center text-gray-500">Loading...</div>;
   if (!user || user.role !== 'admin') return <Navigate to="/admin/login" replace />;
@@ -93,10 +116,17 @@ const AdminLayout = () => {
             <span className="text-sm font-semibold text-[#2b1608]">BTA FreshMart Admin</span>
           </div>
           <div className="hidden lg:block" />
-          <button onClick={openNotifications} className="relative min-h-11 min-w-11 p-2 rounded-full hover:bg-gray-100" title="Admin notifications">
-            <Bell className="w-5 h-5 text-gray-700" />
-            {notifications.some((item) => !item.read) && <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 border-2 border-white rounded-full" />}
-          </button>
+          <div className="flex items-center gap-1">
+            {fingerprintAvailable && !fingerprintEnrolled && (
+              <button disabled={fingerprintBusy} onClick={setupFingerprint} className="min-h-11 px-2.5 rounded-lg text-xs font-semibold text-[#157347] hover:bg-green-50 disabled:opacity-50" title="Enable fingerprint login">
+                <Fingerprint className="w-5 h-5 mx-auto" /><span className="sr-only">Enable fingerprint login</span>
+              </button>
+            )}
+            <button onClick={openNotifications} className="relative min-h-11 min-w-11 p-2 rounded-full hover:bg-gray-100" title="Admin notifications">
+              <Bell className="w-5 h-5 text-gray-700" />
+              {notifications.some((item) => !item.read) && <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 border-2 border-white rounded-full" />}
+            </button>
+          </div>
         </div>
         {showNotifications && (
           <div className="fixed left-3 right-3 top-16 z-50 max-h-[75vh] overflow-y-auto bg-white border rounded-xl shadow-2xl sm:left-auto sm:right-6 sm:w-[420px]">

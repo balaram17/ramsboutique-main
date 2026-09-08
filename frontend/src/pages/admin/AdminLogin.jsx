@@ -5,15 +5,21 @@ import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { useToast } from '../../hooks/use-toast';
-import { ShieldCheck, Loader2 } from 'lucide-react';
+import { ShieldCheck, Loader2, Fingerprint } from 'lucide-react';
 import { completeStaffMicrosoftRedirect, entraConfigured, signInStaffWithMicrosoft } from '../../lib/entraAuth';
+import { hasPlatformAuthenticator, isMobileDevice, loginAdminWithPasskey } from '../../lib/adminPasskey';
 
 const AdminLogin = () => {
-  const { adminLogin, entraStaffLogin } = useAuth();
+  const { adminLogin, acceptAdminSession, entraStaffLogin } = useAuth();
   const nav = useNavigate();
   const { toast } = useToast();
   const [busy, setBusy] = useState(false);
   const [f, setF] = useState({ email: '', password: '' });
+  const [fingerprintAvailable, setFingerprintAvailable] = useState(false);
+
+  useEffect(() => {
+    if (isMobileDevice()) hasPlatformAuthenticator().then(setFingerprintAvailable);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -50,6 +56,21 @@ const AdminLogin = () => {
     } finally { setBusy(false); }
   };
 
+  const fingerprintLogin = async () => {
+    setBusy(true);
+    try {
+      const result = await loginAdminWithPasskey();
+      acceptAdminSession(result);
+      nav('/admin', { replace: true });
+    } catch (e) {
+      if (e?.name !== 'NotAllowedError') toast({
+        title: 'Fingerprint login failed',
+        description: e.response?.data?.detail || e.message || 'Verification was not completed',
+        variant: 'destructive',
+      });
+    } finally { setBusy(false); }
+  };
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-[#2b1608] to-[#6b3410] px-4">
       <div className="w-full max-w-md bg-white rounded-lg shadow-2xl p-8">
@@ -61,6 +82,11 @@ const AdminLogin = () => {
         <Button type="button" onClick={microsoftLogin} disabled={busy || !entraConfigured.staff} variant="outline" className="w-full mb-4 border-[#6b3410] text-[#6b3410]">
           <ShieldCheck className="w-4 h-4 mr-2" /> Staff Login with Microsoft
         </Button>
+        {fingerprintAvailable && (
+          <Button type="button" onClick={fingerprintLogin} disabled={busy} className="w-full mb-4 bg-[#157347] hover:bg-[#105c38]">
+            <Fingerprint className="w-5 h-5 mr-2" /> Login with Fingerprint
+          </Button>
+        )}
         {!entraConfigured.staff && <p className="text-xs text-amber-700 text-center mb-4">Microsoft staff login will be available after Azure configuration.</p>}
         <div className="relative mb-4"><div className="border-t" /><span className="absolute left-1/2 -translate-x-1/2 -top-2.5 bg-white px-2 text-xs text-gray-400">existing admin login</span></div>
         <form onSubmit={submit} className="space-y-4">
