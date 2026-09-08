@@ -40,6 +40,12 @@ export const AuthProvider = ({ children }) => {
     return data.user;
   }, []);
 
+  const acceptAdminSession = useCallback((data) => {
+    storeToken(data.token);
+    setUser(data.user);
+    return data.user;
+  }, []);
+
   const signup = useCallback(async (payload) => {
     const { data } = await api.post('/auth/signup', payload);
     storeToken(data.token);
@@ -95,8 +101,8 @@ const verifyOtp = useCallback(async (phone, otp) => {
   }, []);
 
   const value = useMemo(
-    () => ({ user, loading, login, adminLogin, signup, verifyOtp, entraCustomerLogin, entraStaffLogin, linkEntraCustomer, updateProfile, logout }),
-    [user, loading, login, adminLogin, signup, verifyOtp, entraCustomerLogin, entraStaffLogin, linkEntraCustomer, updateProfile, logout],
+    () => ({ user, loading, login, adminLogin, acceptAdminSession, signup, verifyOtp, entraCustomerLogin, entraStaffLogin, linkEntraCustomer, updateProfile, logout }),
+    [user, loading, login, adminLogin, acceptAdminSession, signup, verifyOtp, entraCustomerLogin, entraStaffLogin, linkEntraCustomer, updateProfile, logout],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
