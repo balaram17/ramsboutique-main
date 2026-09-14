@@ -3,6 +3,7 @@ import api from '../lib/api';
 
 const AuthContext = createContext(null);
 const TOKEN_KEY = 'rb_token';
+const ADMIN_AUTH_METHOD_KEY = 'rb_admin_auth_method';
 
 const storeToken = (t) => {
   try { localStorage.setItem(TOKEN_KEY, t); } catch (_) { /* storage disabled */ }
@@ -36,12 +37,14 @@ export const AuthProvider = ({ children }) => {
   const adminLogin = useCallback(async (email, password) => {
     const { data } = await api.post('/auth/admin-login', { email, password });
     storeToken(data.token);
+    try { localStorage.setItem(ADMIN_AUTH_METHOD_KEY, 'password'); } catch (_) { /* storage disabled */ }
     setUser(data.user);
     return data.user;
   }, []);
 
   const acceptAdminSession = useCallback((data) => {
     storeToken(data.token);
+    try { localStorage.setItem(ADMIN_AUTH_METHOD_KEY, 'passkey'); } catch (_) { /* storage disabled */ }
     setUser(data.user);
     return data.user;
   }, []);
@@ -64,6 +67,7 @@ export const AuthProvider = ({ children }) => {
     const { data } = await api.post('/auth/entra/staff', { token: identityToken });
     if (data.role === 'admin') {
       storeToken(data.token);
+      try { localStorage.setItem(ADMIN_AUTH_METHOD_KEY, 'microsoft'); } catch (_) { /* storage disabled */ }
       setUser(data.user);
     } else {
       localStorage.setItem('agentToken', data.token);
@@ -90,8 +94,17 @@ const verifyOtp = useCallback(async (phone, otp) => {
 }, []);
 
   const logout = useCallback(() => {
+    let authMethod = null;
+    try {
+      authMethod = localStorage.getItem(ADMIN_AUTH_METHOD_KEY);
+      localStorage.removeItem(ADMIN_AUTH_METHOD_KEY);
+      localStorage.removeItem('agentToken');
+      localStorage.removeItem('agentId');
+      localStorage.removeItem('agentName');
+    } catch (_) { /* storage disabled */ }
     clearToken();
     setUser(null);
+    return authMethod;
   }, []);
 
   const updateProfile = useCallback(async (payload) => {
