@@ -43,7 +43,11 @@ const AdminLogin = () => {
   const submit = async (e) => {
     e.preventDefault(); setBusy(true);
     try { await adminLogin(f.email, f.password); nav('/admin'); }
-    catch (e) { toast({ title: 'Admin login failed', description: e.response?.data?.detail || 'Invalid credentials', variant: 'destructive' }); }
+    catch (e) {
+      const description = e.response?.data?.detail
+        || (e.response ? 'Invalid credentials' : 'The server is temporarily unavailable. Please try again shortly.');
+      toast({ title: 'Admin login failed', description, variant: 'destructive' });
+    }
     finally { setBusy(false); }
   };
 
