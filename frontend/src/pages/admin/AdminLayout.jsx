@@ -55,9 +55,12 @@ const AdminLayout = () => {
     }
   };
   const handleLogout = async () => {
-    logout();
-    const redirected = await signOutStaffWithMicrosoft().catch(() => false);
-    if (!redirected) nav('/admin/login', { replace: true });
+    const authMethod = logout();
+    setShowMenu(false);
+    nav('/admin/login', { replace: true });
+    if (authMethod === 'microsoft') {
+      await signOutStaffWithMicrosoft().catch(() => false);
+    }
   };
   const setupFingerprint = async () => {
     setFingerprintBusy(true);
