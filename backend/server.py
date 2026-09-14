@@ -2626,10 +2626,19 @@ logger = logging.getLogger(__name__)
 async def startup():
     await seed_db()
     await seed_chit_data()
-    await db.admin_webauthn_credentials.create_index("credential_id", unique=True)
-    await db.admin_webauthn_credentials.create_index("admin_id")
-    await db.webauthn_challenges.create_index("id", unique=True)
-    await db.webauthn_challenges.create_index("expires_at", expireAfterSeconds=0)
+    # WebAuthn indexes improve integrity and cleanup, but must never prevent the
+    # storefront API from starting when Cosmos DB rejects an optional index.
+    webauthn_indexes = (
+        (db.admin_webauthn_credentials, "credential_id", {"unique": True}),
+        (db.admin_webauthn_credentials, "admin_id", {}),
+        (db.webauthn_challenges, "id", {"unique": True}),
+        (db.webauthn_challenges, "expires_at", {"expireAfterSeconds": 0}),
+    )
+    for collection, field, options in webauthn_indexes:
+        try:
+            await collection.create_index(field, **options)
+        except Exception as exc:
+            logging.warning("Optional WebAuthn index %s was not created: %s", field, exc)
     start_chit_scheduler()
 
 
