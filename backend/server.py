@@ -69,20 +69,8 @@ db = client[os.environ["DB_NAME"]]
 
 app = FastAPI(title="BTA FreshMart Vizag API")
 api = APIRouter(prefix="/api")
-origins = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "https://www.ramsboutique.com",
-    "https://ramsboutique.com",
-]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+from cors_setup import apply_cors
+apply_cors(app)
 
 
 # Store location: Dwaraka Nagar, Visakhapatnam
